@@ -11,6 +11,7 @@ Decided in conversation (2026-11-24). The user's words are quoted as they were s
 - **Internal use only:** "It is for internal use only." Not distributed outside the organisation, so the x264 GPL obligations do not apply and no licence screen is built. If it is ever shared outside, the licence question comes back first.
 - **Platforms:** "Internal means mac", then "And windows." So macOS and Windows; no Linux build.
 - **Not everyone is on Apple Silicon:** asked whether everyone is on an Apple Silicon Mac, the user answered "No". So Intel Macs are built too.
+- **Right column starts open:** "Column starts open".
 - **Slider range:** "20 to 36". CRF 20 to 36, set by the user (HandBrake's own range is 0 to 51).
 - **Quality is a slider, like HandBrake:** "the CRF can be a slider, like in handbreak". This replaces the earlier "No quality slider, just the encoding CRF28, CRF26, CRF30 and CRF23" (four fixed choices), which is no longer valid. The slider shows the CRF number as it moves.
 - **No downscaling, ever:** asked whether the first version offers a 1080p choice: "Never". There is no resolution setting; the output keeps the input's size.
@@ -19,7 +20,7 @@ Decided in conversation (2026-11-24). The user's words are quoted as they were s
 - **Before/after at full size:** "Single video only, you show it next to eachother,but is it possible to also do a before after so we can see the full sized video?" Both views exist.
 - **Layout like Lunaepix:** "Lunaepic also has all data in a tab that comes in from the right when selected, not below the image." Every piece of data and every setting is in a column on the right, none below the picture.
 - **Layout:** "HTML mockup". The mock-up is [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html). It becomes binding once the user approves it.
-- **My calls, not decisions:** the default choice is CRF 28; the slider moves in steps of 1; audio keep/remove stays as a setting; the right column is open when the app starts and folds away with "Hide settings" as in Lunaepix (my reading of "comes in from the right when selected").
+- **My calls, not decisions:** the default choice is CRF 28; the slider moves in steps of 1; audio keep/remove stays as a setting; the right column folds away with "Hide settings" as in Lunaepix (my reading of "comes in from the right when selected").
 - Put off: AV1/WebM output, HEVC output, a brew-style install.
 
 ## Problem
@@ -139,5 +140,4 @@ Changed:  Batch and the name removed; layout moved to a right-hand column; quali
 
 ## Open questions for the user
 
-1. Does the mock-up look right now? Say what to change.
-2. Should the right column be open when the app starts (as I made it), or closed until chosen?
+None. The user approved the mock-up ("Ok, that looks good") and every question is answered.
