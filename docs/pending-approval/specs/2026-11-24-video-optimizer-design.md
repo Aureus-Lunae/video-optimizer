@@ -11,14 +11,15 @@ Decided in conversation (2026-11-24). The user's words are quoted as they were s
 - **Internal use only:** "It is for internal use only." Not distributed outside the organisation, so the x264 GPL obligations do not apply and no licence screen is built. If it is ever shared outside, the licence question comes back first.
 - **Platforms:** "Internal means mac", then "And windows." So macOS and Windows; no Linux build.
 - **Not everyone is on Apple Silicon:** asked whether everyone is on an Apple Silicon Mac, the user answered "No". So Intel Macs are built too.
-- **No quality slider:** "No quality slider, just the encoding CRF28, CRF26, CRF30 and CRF23". Four fixed choices.
+- **Slider range:** "20 to 36". CRF 20 to 36, set by the user (HandBrake's own range is 0 to 51).
+- **Quality is a slider, like HandBrake:** "the CRF can be a slider, like in handbreak". This replaces the earlier "No quality slider, just the encoding CRF28, CRF26, CRF30 and CRF23" (four fixed choices), which is no longer valid. The slider shows the CRF number as it moves.
 - **No downscaling, ever:** asked whether the first version offers a 1080p choice: "Never". There is no resolution setting; the output keeps the input's size.
 - **Single video only, no Batch:** "BATCH removed dammit. I asked for single video only." There is no Batch mode, no queue, no file list and no mode switch. One video at a time.
 - **Name:** "Name also removed. Just call it video optimizer." The app is called "Video optimizer". No other name is used anywhere, including the command line and the repo.
 - **Before/after at full size:** "Single video only, you show it next to eachother,but is it possible to also do a before after so we can see the full sized video?" Both views exist.
 - **Layout like Lunaepix:** "Lunaepic also has all data in a tab that comes in from the right when selected, not below the image." Every piece of data and every setting is in a column on the right, none below the picture.
 - **Layout:** "HTML mockup". The mock-up is [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html). It becomes binding once the user approves it.
-- **My calls, not decisions:** the default choice is CRF 28; the four choices carry a short label; audio keep/remove stays as a setting; the right column is open when the app starts and folds away with "Hide settings" as in Lunaepix (my reading of "comes in from the right when selected").
+- **My calls, not decisions:** the default choice is CRF 28; the slider moves in steps of 1; audio keep/remove stays as a setting; the right column is open when the app starts and folds away with "Hide settings" as in Lunaepix (my reading of "comes in from the right when selected").
 - Put off: AV1/WebM output, HEVC output, a brew-style install.
 
 ## Problem
@@ -34,7 +35,7 @@ Premiere Pro's H.264 export has no CRF (constant quality) setting, only bitrate.
 | Showreel 4K, audio | 96.9 MB | 89.6 MB | 40.8 MB | 30.2 MB |
 | Showreel 4K, no audio | 95.5 MB | **107.1 MB** | 49.8 MB | 34.6 MB |
 
-CRF 26 was not measured. The last row at CRF 23 is larger than its input, so the app must never write a result larger than the input.
+CRF 26 and every other value between the measured ones were not measured; the mock-up's figures for them are estimates. The last row at CRF 23 is larger than its input, so the app must never write a result larger than the input.
 
 ## Goals
 
@@ -52,7 +53,7 @@ Nothing exists yet. Lunaepix is not changed.
 
 | Setting | Values | Default |
 |---|---|---|
-| Quality | CRF 23, 26, 28, 30 (four choices, no other value) | CRF 28 |
+| Quality | a slider, CRF 20 to 36, whole numbers only | CRF 28 |
 | Audio | Keep (AAC 128k), Remove | Keep |
 
 Fixed: `-preset slow`, `-pix_fmt yuv420p`, `-movflags +faststart`. The size is never changed. A source with odd dimensions is padded by one pixel to the next even size, never scaled (x264 with yuv420p needs even sizes).
@@ -81,13 +82,13 @@ Fixed: `-preset slow`, `-pix_fmt yuv420p`, `-movflags +faststart`. The size is n
 
 Everything except the picture lives in one column on the right, like Lunaepix. Nothing is placed below the picture except the play button and position bar, which control the picture.
 
-From top to bottom: "Hide settings" button; then a part that scrolls on its own: **File** (name, size in pixels, frame rate, length, audio) with "Choose other"; **Quality** (the four buttons); **Audio**; **Save to** with "Choose folder"; **Result for the first 10 seconds** (original, optimized, smaller by, estimated whole file, PSNR); and a bottom part that stays visible with the status line and **Save**.
+From top to bottom: "Hide settings" button; then a part that scrolls on its own: **File** (name, size in pixels, frame rate, length, audio) with "Choose other"; **Quality** (the slider); **Audio**; **Save to** with "Choose folder"; **Result for the first 10 seconds** (original, optimized, smaller by, estimated whole file, PSNR); and a bottom part that stays visible with the status line and **Save**.
 
 "Hide settings" folds the column away and a "Show settings" button appears over the top right of the picture. The column slides in and out; with reduced motion set, it does not animate.
 
 ### Command line
 
-`video-optimizer <file> --crf 28 --no-audio --out <dir>`. One file. `--crf` accepts 23, 26, 28 or 30 only. Same naming rules as the window.
+`video-optimizer <file> --crf 28 --no-audio --out <dir>`. One file. `--crf` accepts a whole number from 20 to 36. Same naming rules as the window.
 
 ### Bundled ffmpeg
 
@@ -105,13 +106,14 @@ See Lunaepix's `2026-11-13-lunaepix-apple-design.md` and its Windows workflow.
 
 ## Layout
 
-The binding layout is the mock-up [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html) once the user approves it: the picture fills the window, the column on the right holds all data and settings, and the quality is a row of four buttons with CRF 28 selected when the app opens. A launch never remembers the last choice (like Lunaepix, "Start fresh").
+The binding layout is the mock-up [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html) once the user approves it: the picture fills the window, the column on the right holds all data and settings, and the quality is a slider (CRF 20 to 36, step 1) set to 28 when the app opens, with the CRF number and a short word beside it, and "Better quality, bigger file" / "Smaller file" under its two ends. A launch never remembers the last choice (like Lunaepix, "Start fresh").
 
 ## Tests (positive and negative each)
 
 | Behaviour | Positive | Negative |
 |---|---|---|
-| CRF choice | 23, 26, 28 and 30 are accepted | 24, 0, 51, -1, "28", NaN and an array are refused |
+| CRF value | 20, 28 and 36 are accepted | 19, 37, 28.5, 0, 51, -1, "28", NaN and an array are refused (slider, CLI and the encoder each) |
+| Slider | moving it changes the CRF, the sample and the result figures | it stops at 20 and 36; the keyboard arrows move one step, Home and End the ends |
 | One video only | choosing a second video replaces the first | dropping two files uses neither and shows the message |
 | Never larger | a smaller result is written | a larger result keeps the original bytes and the note |
 | Never overwrites | `optimized-a.mp4` taken gives `optimized-a-1.mp4` | existing files are byte-identical afterwards |
@@ -132,8 +134,8 @@ Edges: a 1 s clip, a clip shorter than 10 s (the sample is the whole clip), a cl
 
 ## Rules check
 
-Checked:  `security.md` (file paths and process arguments), `unit-testing.md`, `vanilla-js.md`, `a11y-rules.md` (range input named, focus visible, reduced motion), `css-conventions.md`, `spec-requirements.md`
-Changed:  Batch and the name removed; layout moved to a right-hand column; edges and negative tests added; file paths go to ffmpeg as separate arguments, never through a shell, and never starting with `-`.
+Checked:  `security.md` (file paths and process arguments), `unit-testing.md`, `vanilla-js.md`, `a11y-rules.md` (both range inputs named, the slider's value read aloud as "CRF 28", focus visible, reduced motion), `css-conventions.md`, `spec-requirements.md`
+Changed:  Batch and the name removed; layout moved to a right-hand column; quality is now a slider; edges and negative tests added; file paths go to ffmpeg as separate arguments, never through a shell, and never starting with `-`.
 
 ## Open questions for the user
 

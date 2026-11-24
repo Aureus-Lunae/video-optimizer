@@ -55,11 +55,12 @@
   dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; font-variant-numeric: tabular-nums; }
   dt { color: var(--muted); } dd { margin: 0; text-align: right; font-weight: 600; }
   dd.good { color: var(--ok); }
-  .crf { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .crf button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 6px; font: inherit; cursor: pointer; text-align: center; }
-  .crf button b { display: block; font-size: 16px; }
-  .crf button span { color: var(--muted); font-size: 12px; }
-  .crf button[aria-checked="true"] { border: 2px solid var(--accent); padding: 7px 5px; }
+  .rf { display: grid; gap: 4px; }
+  .rf__head { display: flex; justify-content: space-between; align-items: baseline; }
+  .rf__value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rf__word { color: var(--muted); font-size: 13px; }
+  .rf input[type=range] { width: 100%; margin: 4px 0 0; accent-color: var(--accent); }
+  .rf__ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
   select { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 10px; width: 100%; }
   .path { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
   .status { color: var(--muted); font-size: 13px; margin: 0; }
@@ -71,7 +72,7 @@
 </head>
 <body>
 <header class="head"><h1>Video optimizer</h1></header>
-<p class="note">Mock-up with made-up numbers and stand-in pictures. Try the view switch, the four quality buttons, Fill window (Escape closes it) and Hide settings. In the real app the pictures are the two videos.</p>
+<p class="note">Mock-up with made-up numbers and stand-in pictures. Try the view switch, the quality slider, Fill window (Escape closes it) and Hide settings. In the real app the pictures are the two videos.</p>
 
 <div class="work">
   <main class="stage" aria-label="Preview">
@@ -123,11 +124,11 @@
 
       <div class="group">
         <h2>Quality</h2>
-        <div class="crf" role="radiogroup" aria-label="Quality (CRF)">
-          <button type="button" role="radio" aria-checked="false" data-crf="23"><b>CRF 23</b><span>Best</span></button>
-          <button type="button" role="radio" aria-checked="false" data-crf="26"><b>CRF 26</b><span>Good</span></button>
-          <button type="button" role="radio" aria-checked="true" data-crf="28"><b>CRF 28</b><span>Recommended</span></button>
-          <button type="button" role="radio" aria-checked="false" data-crf="30"><b>CRF 30</b><span>Smallest</span></button>
+        <div class="rf">
+          <div class="rf__head"><span class="rf__value" id="rf-value">CRF 28</span><span class="rf__word" id="rf-word">Recommended for the web</span></div>
+          <input type="range" id="rf" min="20" max="36" step="1" value="28" list="rf-ticks" aria-label="Quality (CRF)" aria-valuetext="CRF 28, Recommended for the web">
+          <datalist id="rf-ticks"><option value="20"></option><option value="24"></option><option value="28"></option><option value="32"></option><option value="36"></option></datalist>
+          <div class="rf__ends"><span>Better quality, bigger file</span><span>Smaller file</span></div>
         </div>
       </div>
 
@@ -162,8 +163,6 @@
 </div>
 
 <script>
-  const data = { 23: ["23.1 MB","14%","83 MB","44.4 dB"], 26: ["15.9 MB","41%","57 MB","43.3 dB"],
-                 28: ["11.3 MB","58%","40 MB","42.4 dB"], 30: ["8.4 MB","69%","30 MB","41.4 dB"] };
   const $ = id => document.getElementById(id);
   function setView(isBA) {
     $("ba").hidden = !isBA; $("side").hidden = isBA;
@@ -184,12 +183,17 @@
   }
   $("collapse").onclick = () => setCol(false);
   $("reopen").onclick = () => setCol(true);
-  document.querySelector(".crf").addEventListener("click", e => {
-    const b = e.target.closest("button"); if (!b) return;
-    document.querySelectorAll(".crf button").forEach(x => x.setAttribute("aria-checked", x === b));
-    const d = data[b.dataset.crf];
-    $("r-new").textContent = d[0]; $("r-save").textContent = d[1]; $("r-whole").textContent = d[2]; $("r-psnr").textContent = d[3];
-    $("sample-tag").textContent = $("sample-tag2").textContent = "Sample, CRF " + b.dataset.crf;
+  // Made-up numbers: size falls about 13% per CRF step, PSNR about 0.43 dB per step.
+  function word(c) { return c <= 22 ? "Near lossless, very big" : c <= 24 ? "High quality" : c <= 27 ? "Good" : c === 28 ? "Recommended for the web" : c <= 30 ? "Smaller" : "Smallest, check the picture"; }
+  $("rf").addEventListener("input", e => {
+    const c = Number(e.target.value), mb = 11.3 * Math.exp(-0.144 * (c - 28));
+    $("rf-value").textContent = "CRF " + c; $("rf-word").textContent = word(c);
+    e.target.setAttribute("aria-valuetext", "CRF " + c + ", " + word(c));
+    $("r-new").textContent = mb.toFixed(1) + " MB";
+    $("r-save").textContent = Math.max(0, Math.round((1 - mb / 26.9) * 100)) + "%";
+    $("r-whole").textContent = Math.round(mb * 40 / 11.3) + " MB";
+    $("r-psnr").textContent = (42.4 - 0.43 * (c - 28)).toFixed(1) + " dB";
+    $("sample-tag").textContent = $("sample-tag2").textContent = "Sample, CRF " + c;
   });
 </script>
 </body>
