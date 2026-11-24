@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video optimizer mock-up</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --text: #1d2330; --muted: #5d6677; --line: #d8dce4;
+    --accent: #4b3fd0; --accent-text: #fff; --ok: #1d7a46; --stage: #0f1117;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161c; --panel: #1d2028; --text: #e8ebf2; --muted: #9aa3b5; --line: #343947;
+      --accent: #8f86ff; --accent-text: #14161c; --ok: #55c98a; --stage: #090a0e; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+  .head { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .head h1 { font-size: 16px; margin: 0; }
+  .note { color: var(--muted); font-size: 12px; margin: 0; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+  .work { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
+  .stage { flex: 1; min-width: 0; background: var(--stage); display: flex; flex-direction: column; padding: 12px; gap: 10px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  .btn--primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; width: 100%; padding: 10px; }
+  .view { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .view button { border: 0; background: var(--panel); color: var(--text); padding: 6px 14px; font: inherit; cursor: pointer; }
+  .view button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  .pic { flex: 1; min-height: 240px; position: relative; border-radius: 8px; overflow: hidden; user-select: none; touch-action: none; }
+  .layer { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 13px; }
+  .layer--before { background: linear-gradient(135deg, #3a4a7a, #7a4a6a); }
+  .layer--after { background: linear-gradient(135deg, #3b4a78, #78496a); clip-path: inset(0 0 0 50%); }
+  .layer--after::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,.08) 0 3px, transparent 3px 7px); }
+  .tag { position: absolute; top: 8px; background: rgba(0,0,0,.6); color: #fff; padding: 2px 8px; border-radius: 4px; z-index: 2; font-size: 13px; }
+  .tag--l { left: 8px; } .tag--r { right: 8px; }
+  .handle { position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; background: #fff; z-index: 3; transform: translateX(-1.5px); }
+  .handle::after { content: "\2194"; position: absolute; top: 50%; left: 50%; width: 32px; height: 32px; margin: -16px; border-radius: 50%; background: #fff; color: #222; display: grid; place-items: center; box-shadow: 0 1px 6px rgba(0,0,0,.4); }
+  .pic:focus-within .handle::after { outline: 3px solid var(--accent); }
+  .range { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; z-index: 4; margin: 0; }
+  .side { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .side .layer { position: relative; border-radius: 8px; }
+  .transport { display: flex; align-items: center; gap: 10px; color: #cfd4e2; }
+  .transport input { flex: 1; }
+  /* Right column, like Lunaepix: everything lives here, and it folds away. */
+  .col { width: 21rem; flex: none; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; transition: margin-right .2s ease; }
+  .col.-hidden { margin-right: -21rem; }
+  @media (prefers-reduced-motion: reduce) { .col { transition: none; } }
+  .col__top { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: flex-end; }
+  .col__scroll { flex: 1; overflow: auto; padding: 14px; }
+  .col__bottom { padding: 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+  .reopen { position: absolute; top: 12px; right: 12px; z-index: 5; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; }
+  .group { margin-bottom: 18px; }
+  dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); } dd { margin: 0; text-align: right; font-weight: 600; }
+  dd.good { color: var(--ok); }
+  .crf { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .crf button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 6px; font: inherit; cursor: pointer; text-align: center; }
+  .crf button b { display: block; font-size: 16px; }
+  .crf button span { color: var(--muted); font-size: 12px; }
+  .crf button[aria-checked="true"] { border: 2px solid var(--accent); padding: 7px 5px; }
+  select { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 10px; width: 100%; }
+  .path { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+  .status { color: var(--muted); font-size: 13px; margin: 0; }
+  .pic.-full { position: fixed; inset: 0; z-index: 20; border-radius: 0; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 760px) { .col { width: 17rem; } .col.-hidden { margin-right: -17rem; } }
+</style>
+</head>
+<body>
+<header class="head"><h1>Video optimizer</h1></header>
+<p class="note">Mock-up with made-up numbers and stand-in pictures. Try the view switch, the four quality buttons, Fill window (Escape closes it) and Hide settings. In the real app the pictures are the two videos.</p>
+
+<div class="work">
+  <main class="stage" aria-label="Preview">
+    <div class="bar">
+      <div class="view" role="group" aria-label="View">
+        <button type="button" id="v-ba" aria-pressed="true">Before / after</button>
+        <button type="button" id="v-side" aria-pressed="false">Side by side</button>
+      </div>
+      <button type="button" class="btn" id="fill">Fill window</button>
+      <button type="button" class="btn" id="zoom">Zoom 100%</button>
+    </div>
+
+    <div class="pic" id="pic">
+      <div id="ba" style="position:absolute;inset:0">
+        <div class="layer layer--before"><span class="tag tag--l">Original</span>Showreel V1.mp4, full size</div>
+        <div class="layer layer--after" id="after"><span class="tag tag--r" id="sample-tag">Sample, CRF 28</span></div>
+        <div class="handle" id="handle"></div>
+        <input class="range" id="range" type="range" min="0" max="100" value="50" aria-label="Before and after divider">
+      </div>
+      <div class="side" id="side" hidden>
+        <div class="layer layer--before"><span class="tag tag--l">Original</span></div>
+        <div class="layer layer--after" style="clip-path:none"><span class="tag tag--l" id="sample-tag2">Sample, CRF 28</span></div>
+      </div>
+    </div>
+
+    <div class="transport">
+      <button type="button" class="btn">Play</button>
+      <input type="range" min="0" max="100" value="30" aria-label="Position in the 10 second sample">
+      <span>0:03 / 0:10</span>
+    </div>
+  </main>
+
+  <button type="button" class="btn reopen" id="reopen" hidden>Show settings</button>
+
+  <aside class="col" id="col" aria-label="Settings">
+    <div class="col__top"><button type="button" class="btn" id="collapse" aria-expanded="true">Hide settings</button></div>
+    <div class="col__scroll">
+      <div class="group">
+        <h2>File</h2>
+        <dl>
+          <dt>Name</dt><dd>Showreel V1.mp4</dd>
+          <dt>Size</dt><dd>3840 x 2160</dd>
+          <dt>Frame rate</dt><dd>24 fps</dd>
+          <dt>Length</dt><dd>0:36</dd>
+          <dt>Audio</dt><dd>AAC, 317 kbps</dd>
+        </dl>
+        <p class="path"><button type="button" class="btn">Choose other</button></p>
+      </div>
+
+      <div class="group">
+        <h2>Quality</h2>
+        <div class="crf" role="radiogroup" aria-label="Quality (CRF)">
+          <button type="button" role="radio" aria-checked="false" data-crf="23"><b>CRF 23</b><span>Best</span></button>
+          <button type="button" role="radio" aria-checked="false" data-crf="26"><b>CRF 26</b><span>Good</span></button>
+          <button type="button" role="radio" aria-checked="true" data-crf="28"><b>CRF 28</b><span>Recommended</span></button>
+          <button type="button" role="radio" aria-checked="false" data-crf="30"><b>CRF 30</b><span>Smallest</span></button>
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Audio</h2>
+        <select aria-label="Audio"><option>Keep</option><option>Remove</option></select>
+      </div>
+
+      <div class="group">
+        <h2>Save to</h2>
+        <button type="button" class="btn">Choose folder</button>
+        <p class="path">Next to the original</p>
+      </div>
+
+      <div class="group">
+        <h2>Result (first 10 seconds)</h2>
+        <dl>
+          <dt>Original</dt><dd>26.9 MB</dd>
+          <dt>Optimized</dt><dd id="r-new">11.3 MB</dd>
+          <dt>Smaller by</dt><dd class="good" id="r-save">58%</dd>
+          <dt>Whole file, about</dt><dd id="r-whole">40 MB</dd>
+          <dt>Quality (PSNR)</dt><dd id="r-psnr">42.4 dB</dd>
+        </dl>
+        <p class="path">Above 40 dB is hard to see.</p>
+      </div>
+    </div>
+    <div class="col__bottom">
+      <p class="status" aria-live="polite">Sample ready. Save encodes the whole video.</p>
+      <button type="button" class="btn btn--primary">Save</button>
+    </div>
+  </aside>
+</div>
+
+<script>
+  const data = { 23: ["23.1 MB","14%","83 MB","44.4 dB"], 26: ["15.9 MB","41%","57 MB","43.3 dB"],
+                 28: ["11.3 MB","58%","40 MB","42.4 dB"], 30: ["8.4 MB","69%","30 MB","41.4 dB"] };
+  const $ = id => document.getElementById(id);
+  function setView(isBA) {
+    $("ba").hidden = !isBA; $("side").hidden = isBA;
+    $("v-ba").setAttribute("aria-pressed", isBA); $("v-side").setAttribute("aria-pressed", !isBA);
+  }
+  $("v-ba").onclick = () => setView(true);
+  $("v-side").onclick = () => setView(false);
+  $("range").addEventListener("input", e => {
+    $("after").style.clipPath = "inset(0 0 0 " + e.target.value + "%)";
+    $("handle").style.left = e.target.value + "%";
+  });
+  $("fill").onclick = () => $("pic").classList.toggle("-full");
+  document.addEventListener("keydown", e => { if (e.key === "Escape") $("pic").classList.remove("-full"); });
+  function setCol(open) {
+    $("col").classList.toggle("-hidden", !open);
+    $("collapse").setAttribute("aria-expanded", open);
+    $("reopen").hidden = open;
+  }
+  $("collapse").onclick = () => setCol(false);
+  $("reopen").onclick = () => setCol(true);
+  document.querySelector(".crf").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    document.querySelectorAll(".crf button").forEach(x => x.setAttribute("aria-checked", x === b));
+    const d = data[b.dataset.crf];
+    $("r-new").textContent = d[0]; $("r-save").textContent = d[1]; $("r-whole").textContent = d[2]; $("r-psnr").textContent = d[3];
+    $("sample-tag").textContent = $("sample-tag2").textContent = "Sample, CRF " + b.dataset.crf;
+  });
+</script>
+</body>
+</html>
