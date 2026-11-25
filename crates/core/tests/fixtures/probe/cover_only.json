@@ -1,0 +1,29 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "avg_frame_rate": "0/0",
+      "bit_rate": "70248",
+      "disposition": {
+        "attached_pic": 0
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "video",
+      "codec_name": "mjpeg",
+      "width": 64,
+      "height": 64,
+      "pix_fmt": "yuvj420p",
+      "avg_frame_rate": "0/0",
+      "disposition": {
+        "attached_pic": 1
+      }
+    }
+  ],
+  "format": {
+    "duration": "1.000000"
+  }
+}

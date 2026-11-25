@@ -1,0 +1,30 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 1328,
+      "height": 747,
+      "pix_fmt": "yuv420p",
+      "avg_frame_rate": "24/1",
+      "bit_rate": "7342768",
+      "disposition": {
+        "attached_pic": 0
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "avg_frame_rate": "0/0",
+      "bit_rate": "317000",
+      "disposition": {
+        "attached_pic": 0
+      }
+    }
+  ],
+  "format": {
+    "duration": "36.041667"
+  }
+}

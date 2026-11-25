@@ -96,11 +96,12 @@ fn locate_from(
 
 /// A command for `program` with no stdin and both outputs piped. On Windows
 /// the programs are console programs: without `CREATE_NO_WINDOW`, each start
-/// from the window app would flash a console.
-// Nothing in the library starts a program yet; the encoder and the probe
-// will. Remove the allow with the first caller.
-#[allow(dead_code)]
-pub(crate) fn command(program: &Path) -> Command {
+/// from the window app would flash a console. Both pipes must be read to the
+/// end, or the program blocks on a full pipe: [`Command::output`] does.
+///
+/// Public so the test clip maker (`tests/common/clips.rs`) starts ffmpeg the
+/// same way the library does.
+pub fn command(program: &Path) -> Command {
     let mut command = Command::new(program);
     command
         .stdin(Stdio::null())
