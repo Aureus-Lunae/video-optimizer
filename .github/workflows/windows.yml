@@ -9,9 +9,6 @@
 #   - every action is pinned to a full commit hash, with its release in a comment;
 #   - the token can only read the repository;
 #   - no pull request trigger, and no ${{ }} expression inside a run script;
-#   - C:\Windows\System32 goes first on the path before anything runs cargo,
-#     so `tar` is Windows' own bsdtar (see the comment at the first step that
-#     does it), and a step fails the job unless it is;
 #   - the test job stages ffmpeg and ffprobe and points
 #     VIDEO_OPTIMIZER_TOOLS_DIR at them before the tests run;
 #   - the Rust tests and the window script tests run even after a failed
@@ -69,19 +66,6 @@ jobs:
         with:
           node-version: 22
 
-      # The staging below unpacks the ffmpeg .zip files with `tar`. Under
-      # `shell: bash` Git's usr/bin comes first on the path, so `tar` is GNU
-      # tar, which cannot read a .zip and reads `C:\...` as a remote
-      # host:file. GITHUB_PATH puts a folder first on the path of the steps
-      # after this one, so `tar` becomes Windows' own bsdtar.
-      - name: Put Windows' own tools first on the path
-        run: echo 'C:\Windows\System32' >> "$GITHUB_PATH"
-
-      # A step apart, because the path takes effect from the next step on. It
-      # fails the job unless `tar` is bsdtar, and prints which one it is.
-      - name: Check that tar is bsdtar
-        run: tar --version | grep bsdtar
-
       # Downloads the pinned ffmpeg 9.1 build (ffmpeg/builds.toml), checks its
       # SHA-256 and unpacks ffmpeg.exe and ffprobe.exe into a folder of the
       # runner. The CLI and core tests find them through
@@ -134,15 +118,6 @@ jobs:
       # No build cache here: the test job's cache is a debug-profile cache,
       # which a release build cannot use, and a cache of its own would only
       # add upload time.
-
-      # `cargo tauri build` runs the ffmpeg staging first (beforeBuildCommand
-      # of tauri.bundle.conf.json), which unpacks .zip files with `tar`: the
-      # same two steps as in the test job.
-      - name: Put Windows' own tools first on the path
-        run: echo 'C:\Windows\System32' >> "$GITHUB_PATH"
-
-      - name: Check that tar is bsdtar
-        run: tar --version | grep bsdtar
 
       # The repository has no package.json, so the Tauri command line comes
       # from crates.io at a fixed version, built against the lock file of the

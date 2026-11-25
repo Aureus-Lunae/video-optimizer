@@ -11,15 +11,14 @@
 //!
 //! The rules are the same for both files; what differs per platform (the
 //! file, the runners, the installer jobs with their artifacts, the cache, the
-//! Rust-test policy, the Windows tar rule) is one `Platform` profile that
-//! every check reads. The Mac cache steps save only from `main`. The Windows
-//! file has two rules more: `C:\Windows\System32` goes first on the path
-//! before ffmpeg is staged or cargo runs (under `shell: bash` Git's own `tar`
-//! comes first, which cannot read a `.zip`), and the installer job checks that
-//! ffmpeg and ffprobe sit beside the app. The Mac file checks, in the built app
-//! and inside the mounted disk image, that both programs are there, signed,
-//! sealed, of the right architecture and built for macOS 11 or older. Each
-//! check has fixtures it must catch, so it is known to fail when it should.
+//! Rust-test policy) is one `Platform` profile that every check reads. The Mac
+//! cache steps save only from `main`. The Windows installer job checks that
+//! ffmpeg and ffprobe sit beside the app. Each Mac installer job runs
+//! `scripts/check-mac-app.sh` with its own architecture on the built app and
+//! inside the mounted disk image; the guard here proves the call is there and
+//! cannot pass when the script fails, and `check_mac_app.rs` proves what the
+//! script refuses. Each check has fixtures it must catch, so it is known to
+//! fail when it should.
 //!
 //! The workflow is parsed as YAML 1.2 (so the key `on` is a name, not
 //! boolean true) and every check reads the parsed tree, so quoting, spacing
@@ -75,9 +74,6 @@ struct Platform {
     /// The `save-if` every `Swatinem/rust-cache` step must carry, as the
     /// expression text; `None`: no requirement.
     cache_save_if: Option<&'static str>,
-    /// Whether every job that runs cargo must put `C:\Windows\System32` first
-    /// on the path (and check `tar`) before its first cargo step.
-    system32_first: bool,
 }
 
 /// The only `save-if` the Mac cache steps may have: tag runs cannot restore
@@ -96,7 +92,6 @@ const WINDOWS: Platform = Platform {
     }],
     build_cache: BuildCache::Forbidden,
     cache_save_if: None,
-    system32_first: true,
 };
 
 /// Apple Silicon (`macos-latest`) and Intel (`macos-15-intel`); the artifacts
@@ -122,7 +117,6 @@ const MACOS: Platform = Platform {
     ],
     build_cache: BuildCache::Required,
     cache_save_if: Some(SAVE_ONLY_FROM_MAIN),
-    system32_first: false,
 };
 
 fn workflow(platform: &Platform) -> String {
@@ -399,7 +393,7 @@ fn injection_problems(text: &str) -> Vec<String> {
 /// A script without its shell comments (whole-line, and a trailing ` # ...`).
 /// Used to decide whether a command is present, where losing text can make a
 /// check fail but never pass, and where a step's first cargo command is
-/// (`system32_problems`, the `Required` cache rule): there a `cargo` after a ` #`
+/// (`installer_check_problems`, the `Required` cache rule): there a `cargo` after a ` #`
 /// inside quotes is lost, so that step does not count as a cargo step.
 fn without_comments(script: &str) -> String {
     let code = script
@@ -976,103 +970,20 @@ fn tools_dir_problems(text: &str) -> Vec<String> {
     })
 }
 
-// ---- Windows: tar ----
-
-/// Windows' own tools folder.
-const SYSTEM32: &str = r"C:\Windows\System32";
-
-/// Whether a script (comments removed) puts System32 on the path:
-/// `echo 'C:\Windows\System32' >> "$GITHUB_PATH"`. `GITHUB_PATH` adds to the
-/// front of the path of the steps after it.
-fn adds_system32_to_path(code: &str) -> bool {
-    code.lines().any(|line| {
-        let words = words_of(line);
-        words.iter().any(|word| word.eq_ignore_ascii_case(SYSTEM32))
-            && words.windows(2).any(|w| w == [">>", "$GITHUB_PATH"])
-    })
-}
-
-/// Whether a script (comments removed) shows which `tar` it runs and fails
-/// unless that is bsdtar: `tar --version | grep bsdtar`.
-fn checks_for_bsdtar(code: &str) -> bool {
-    code.lines().any(|line| {
-        let words = words_of(line);
-        words.windows(2).any(|w| w == ["tar", "--version"])
-            && words.windows(2).any(|w| w == ["grep", "bsdtar"])
-    })
-}
-
-/// `Platform::system32_first`: every job with a cargo step puts System32 on
-/// the path in a step before its first cargo step (`cargo run` of the staging
-/// and the `beforeBuildCommand` read `.zip` files with `tar`, and under
-/// `shell: bash` Git's `usr/bin` comes first, where GNU tar cannot read a zip
-/// and reads `C:\...` as a remote `host:file`), and in a later step, still
-/// before the first cargo step, runs `tar --version | grep bsdtar`, so a path
-/// that did not take effect fails there with a clear line.
-fn system32_problems(text: &str, platform: &Platform) -> Vec<String> {
-    on_tree(text, |doc| {
-        if !platform.system32_first {
-            return Vec::new();
-        }
-        let mut problems = Vec::new();
-        for (name, job) in jobs(doc) {
-            let code = steps_of(job).into_iter().map(step_code).collect::<Vec<_>>();
-            let Some(cargo) = code.iter().position(|script| runs_cargo(script)) else {
-                continue;
-            };
-            let path = code.iter().position(|script| adds_system32_to_path(script));
-            let tar = code.iter().position(|script| checks_for_bsdtar(script));
-            match path {
-                None => problems.push(format!(
-                    "job {name}: does not put {SYSTEM32} on the path through GITHUB_PATH"
-                )),
-                Some(path) if path >= cargo => problems.push(format!(
-                    "job {name}: puts {SYSTEM32} on the path at or after its first cargo step"
-                )),
-                Some(_) => {}
-            }
-            match (tar, path) {
-                (None, _) => {
-                    problems.push(format!("job {name}: does not check that tar is bsdtar"))
-                }
-                (Some(tar), _) if tar >= cargo => problems.push(format!(
-                    "job {name}: checks tar at or after its first cargo step"
-                )),
-                (Some(tar), Some(path)) if tar <= path => problems.push(format!(
-                    "job {name}: checks tar in or before the step that sets the path"
-                )),
-                _ => {}
-            }
-        }
-        problems
-    })
-}
-
 // ---- the installer checks ----
-
-/// The command that makes a step the Mac check step.
-const CODESIGN_VERIFY: &str = "codesign --verify --deep --strict";
-
-/// What the Mac check step must run, outside shell comments: the seal lists
-/// both programs (`plutil -extract`), the disk image is mounted and checked
-/// too (`hdiutil attach`), each program's architecture (`lipo -archs`, against
-/// `$EXPECTED_ARCH`) and its macOS minimum (`vtool -show-build`, `minos`).
-/// `ffmpeg` and `ffprobe` must both be named in it.
-const MAC_CHECK_PARTS: [&str; 9] = [
-    "plutil -extract",
-    "hdiutil attach",
-    "lipo -archs",
-    "$EXPECTED_ARCH",
-    "vtool -show-build",
-    "minos",
-    "ffmpeg",
-    "ffprobe",
-    "Contents/MacOS",
-];
 
 /// What the Windows check step must test, one `test -f` line each: the app
 /// and both programs beside it in the build folder (the NSIS installer takes
 /// them from there).
+/// The script every Mac Installer job runs on its built app and, inside the
+/// mounted disk image, on the app people download; what it refuses is tested in
+/// `check_mac_app.rs`. The job's whole check step is this one call.
+const CHECK_SCRIPT: &str = "scripts/check-mac-app.sh";
+
+/// The words of the call: the script with the job's architecture, which the
+/// step takes from its own `env: EXPECTED_ARCH`.
+const CHECK_CALL: [&str; 3] = ["bash", CHECK_SCRIPT, "$EXPECTED_ARCH"];
+
 const WINDOWS_CHECK_LINES: [&str; 3] = [
     "test -f target/release/video-optimizer-app.exe",
     "test -f target/release/ffmpeg.exe",
@@ -1081,14 +992,16 @@ const WINDOWS_CHECK_LINES: [&str; 3] = [
 
 /// Every Installer job has a check step between the bundle build and the
 /// upload, so a broken app or installer fails the run before anyone downloads
-/// it. A Mac job (`arch` set): the first step of the job that runs
-/// `codesign --verify --deep --strict` outside shell comments, with
-/// `MAC_CHECK_PARTS` in it and `env: EXPECTED_ARCH` equal to the job's `arch`.
-/// A Windows job: the first step that has the `WINDOWS_CHECK_LINES` among its
-/// lines. Either comes after a step that runs `cargo tauri build` and before
-/// the first upload. Like the other script checks this is a lint on the
-/// `run:` text: it proves the commands are there and in order, not what the
-/// script does with their results.
+/// it. A Mac job (`arch` set): the first step of the job whose script, outside
+/// shell comments, names `CHECK_SCRIPT`. That step is exactly the one call
+/// `CHECK_CALL` (no `|| true`, no second command, no other script or argument:
+/// a call that can pass when the script fails proves nothing), has no `if` and
+/// no `continue-on-error`, and has `env: EXPECTED_ARCH` equal to the job's
+/// `arch`. A Windows job: the first step that has the `WINDOWS_CHECK_LINES`
+/// among its lines. Either comes after a step that runs `cargo tauri build` and
+/// before the first upload. Like the other script checks this is a lint on the
+/// `run:` text: it proves the check is called and in order, not what the
+/// script does (`check_mac_app.rs` proves that).
 fn installer_check_problems(text: &str, platform: &Platform) -> Vec<String> {
     on_tree(text, |doc| {
         let mut problems = Vec::new();
@@ -1107,18 +1020,28 @@ fn installer_check_problems(text: &str, platform: &Platform) -> Vec<String> {
                     .collect::<Vec<_>>()
             };
             let check = if let Some(arch) = installer.arch {
-                let Some(check) = code
-                    .iter()
-                    .position(|script| script.contains(CODESIGN_VERIFY))
+                let Some(check) = code.iter().position(|script| script.contains(CHECK_SCRIPT))
                 else {
                     problems.push(format!(
-                        "job {name}: no check step: no step runs {CODESIGN_VERIFY}"
+                        "job {name}: no check step: no step runs {CHECK_SCRIPT}"
                     ));
                     continue;
                 };
-                for part in MAC_CHECK_PARTS {
-                    if !code[check].contains(part) {
-                        problems.push(format!("job {name}: the check step does not run {part}"));
+                let calls = code[check]
+                    .lines()
+                    .map(words_of)
+                    .filter(|words| !words.is_empty())
+                    .collect::<Vec<_>>();
+                if calls != [CHECK_CALL] {
+                    problems.push(format!(
+                        "job {name}: the check step must run exactly `{}`, not: {}",
+                        CHECK_CALL.join(" "),
+                        code[check].trim()
+                    ));
+                }
+                for key in ["if", "continue-on-error"] {
+                    if !steps[check][key].is_badvalue() {
+                        problems.push(format!("job {name}: the check step has {key}"));
                     }
                 }
                 let expected = scalar(&steps[check]["env"]["EXPECTED_ARCH"]);
@@ -1204,7 +1127,6 @@ fn every_check(text: &str, platform: &Platform) -> Vec<(&'static str, Vec<String
             installer_check_problems(text, platform),
         ),
         ("tools_dir_problems", tools_dir_problems(text)),
-        ("system32_problems", system32_problems(text, platform)),
         ("node_step_problems", node_step_problems(text)),
         ("cache_save_problems", cache_save_problems(text, platform)),
         ("rust_test_problems", rust_test_problems(text)),
@@ -1219,13 +1141,6 @@ const BUILD_STEP: &str =
     "      - run: cargo tauri build --config src-tauri/tauri.bundle.conf.json\n";
 
 const TAURI_INSTALL: &str = "      - run: cargo install tauri-cli --locked --version 2.12.4\n";
-
-/// Windows: System32 first on the path, in both jobs of `good()`.
-const SYSTEM32_STEP: &str = r#"      - run: echo 'C:\Windows\System32' >> "$GITHUB_PATH"
-"#;
-
-/// Windows: the step after it, which fails unless `tar` is bsdtar.
-const BSDTAR_STEP: &str = "      - run: tar --version | grep bsdtar\n";
 
 /// The test job's staging of ffmpeg, as `windows.yml` and `macos.yml` run it.
 const STAGE_STEP: &str = r#"      - run: |
@@ -1287,7 +1202,7 @@ fn good() -> String {
         with:
           node-version: 22
       - uses: Swatinem/rust-cache@PIN # v2
-{SYSTEM32_STEP}{BSDTAR_STEP}{STAGE_STEP}{FMT_STEP}      - run: cargo clippy --workspace --all-targets -- -D warnings
+{STAGE_STEP}{FMT_STEP}      - run: cargo clippy --workspace --all-targets -- -D warnings
         if: success() || failure()
 {RUST_TESTS}{NODE_STEP}"
     );
@@ -1296,7 +1211,7 @@ fn good() -> String {
     needs: test
     runs-on: windows-latest
     steps:
-{SYSTEM32_STEP}{BSDTAR_STEP}{TAURI_INSTALL}{BUILD_STEP}{WINDOWS_CHECK_STEP}{UPLOAD_STEP}"
+{TAURI_INSTALL}{BUILD_STEP}{WINDOWS_CHECK_STEP}{UPLOAD_STEP}"
     );
     format!("{HEAD}{test}{build}").replace("PIN", PIN)
 }
@@ -1308,26 +1223,13 @@ const MAC_SAVE_IF: &str =
 /// An Installer job's own cache in `good_mac()`.
 const MAC_BUILD_CACHE: &str = "      - uses: Swatinem/rust-cache@PIN # v2.9.3\n        with:\n          save-if: ${{ github.ref == 'refs/heads/main' }}\n";
 
-/// The check step of a Mac Installer job, with the script `macos.yml` runs
-/// (shortened to the commands the guard looks for). `@ARCH@` is the job's
+/// The check step of a Mac Installer job, as `macos.yml` has it: the one
+/// call of the script (`scripts/check-mac-app.sh`, tested in
+/// `check_mac_app.rs`) with the job's architecture. `@ARCH@` is that
 /// architecture.
 const MAC_CHECK_STEP: &str = r#"      - env:
           EXPECTED_ARCH: @ARCH@
-        run: |
-          check_app() {
-            ls -l "$1/Contents/MacOS"
-            codesign --verify --deep --strict --verbose=2 "$1"
-            for tool in ffmpeg ffprobe; do
-              program="$1/Contents/MacOS/$tool"
-              plutil -extract "files2.MacOS/$tool" xml1 -o - "$1/Contents/_CodeSignature/CodeResources" >/dev/null
-              test "$(lipo -archs "$program")" = "$EXPECTED_ARCH"
-              vtool -show-build "$program" | awk '$1 == "minos" { print $2 }'
-            done
-          }
-          check_app "target/release/bundle/macos/Video optimizer.app"
-          dmg=$(ls target/release/bundle/dmg/*.dmg)
-          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
-          check_app "$mount/Video optimizer.app"
+        run: bash scripts/check-mac-app.sh "$EXPECTED_ARCH"
 "#;
 
 const MAC_UPLOAD_STEP: &str = "      - uses: actions/upload-artifact@PIN # v7
@@ -1474,7 +1376,7 @@ fn both_workflows_pass_every_check() {
 
 #[test]
 fn the_checks_of_the_real_files_are_not_vacuous() {
-    for (platform, refs, scripts, caches) in [(&WINDOWS, 7, 14, 1), (&MACOS, 12, 11, 3)] {
+    for (platform, refs, scripts, caches) in [(&WINDOWS, 7, 10, 1), (&MACOS, 12, 11, 3)] {
         let text = workflow(platform);
         let (found_refs, found_scripts) =
             (action_references(&text).len(), run_scripts(&text).len());
@@ -2360,7 +2262,7 @@ fn each_mac_installer_job_uploads_its_own_artifact_in_a_fixture() {
 // ---- the platform profile ----
 
 /// A profile that differs from `WINDOWS` in its file, runners and artifact.
-/// Its cache, `save-if` and tar policies are Windows's.
+/// Its cache and `save-if` policies are Windows's.
 const OTHER: Platform = Platform {
     file: "other.yml",
     test_runner: "other-runner",
@@ -2540,74 +2442,6 @@ fn a_test_job_that_does_not_stage_ffmpeg_for_the_tests_is_caught_in_a_fixture() 
     assert_eq!(tools_dir_problems(&good().replace("  test:\n", "  checks:\n")), ["no test job"]);
 }
 
-// ---- Windows: tar ----
-
-#[test]
-fn system32_first_and_a_bsdtar_check_before_cargo_pass_a_fixture() {
-    assert_clean(system32_problems(&good(), &WINDOWS));
-    // One step may hold both lines of one script only when tar is checked in a later step.
-    let one_line = "      - run: echo \"C:\\Windows\\System32\" >> \"$GITHUB_PATH\"\n";
-    assert_clean(system32_problems(&with(SYSTEM32_STEP, one_line), &WINDOWS));
-    // A job without a cargo step needs neither.
-    assert_clean(system32_problems(
-        &steps_doc("      - run: node --version"),
-        &WINDOWS,
-    ));
-    // The Mac's tar is bsdtar already: its profile asks for neither, and its fixture has neither.
-    assert!(!good_mac().contains("System32"));
-    assert_clean(system32_problems(&good_mac(), &MACOS));
-}
-
-#[test]
-#[rustfmt::skip]
-fn a_windows_job_without_system32_first_or_without_the_bsdtar_check_is_caught_in_a_fixture() {
-    // Missing in the test job (the first one), in the build job, in both.
-    let test_job = in_job(&good(), "test", SYSTEM32_STEP, "");
-    assert_eq!(system32_problems(&test_job, &WINDOWS), ["job test: does not put C:\\Windows\\System32 on the path through GITHUB_PATH"]);
-    let build_job = in_job(&good(), "build", SYSTEM32_STEP, "");
-    assert_eq!(system32_problems(&build_job, &WINDOWS), ["job build: does not put C:\\Windows\\System32 on the path through GITHUB_PATH"]);
-    assert_eq!(system32_problems(&good().replace(SYSTEM32_STEP, ""), &WINDOWS).len(), 2);
-    // Another folder, the wrong file, a plain echo, and only in a comment or a step name.
-    for step in [
-        "      - run: echo 'C:\\Windows' >> \"$GITHUB_PATH\"\n",
-        "      - run: echo 'C:\\Windows\\System32' >> \"$GITHUB_ENV\"\n",
-        "      - run: echo 'C:\\Windows\\System32'\n",
-        "      - run: |\n          # echo 'C:\\Windows\\System32' >> \"$GITHUB_PATH\"\n          ls\n",
-        "      - name: C:\\Windows\\System32 >> GITHUB_PATH\n        run: ls\n",
-    ] {
-        let text = in_job(&good(), "test", SYSTEM32_STEP, step);
-        assert_problem(&system32_problems(&text, &WINDOWS), "job test: does not put", step);
-    }
-    // After the first cargo step: the staging already ran with GNU tar.
-    let late = in_job(&good(), "test", SYSTEM32_STEP, "").replacen(STAGE_STEP, &format!("{STAGE_STEP}{SYSTEM32_STEP}"), 1);
-    assert_problem(&system32_problems(&late, &WINDOWS), "job test: puts C:\\Windows\\System32 on the path at or after", "late path");
-    // No tar check, a tar check that does not look for bsdtar, one in a comment.
-    for step in [
-        "",
-        "      - run: tar --version\n",
-        "      - run: tar --version | grep gnu\n",
-        "      - run: |\n          # tar --version | grep bsdtar\n          ls\n",
-    ] {
-        let text = in_job(&good(), "test", BSDTAR_STEP, step);
-        assert_eq!(system32_problems(&text, &WINDOWS), ["job test: does not check that tar is bsdtar"], "{step}");
-    }
-    // The tar check after the first cargo step, in the same step as the path, or before it.
-    let late_tar = in_job(&good(), "test", BSDTAR_STEP, "").replacen(STAGE_STEP, &format!("{STAGE_STEP}{BSDTAR_STEP}"), 1);
-    assert_eq!(system32_problems(&late_tar, &WINDOWS), ["job test: checks tar at or after its first cargo step"]);
-    let same_step = in_job(&good(), "test", &format!("{SYSTEM32_STEP}{BSDTAR_STEP}"), "      - run: |\n          echo 'C:\\Windows\\System32' >> \"$GITHUB_PATH\"\n          tar --version | grep bsdtar\n");
-    assert_eq!(system32_problems(&same_step, &WINDOWS), ["job test: checks tar in or before the step that sets the path"]);
-    let before = in_job(&good(), "test", &format!("{SYSTEM32_STEP}{BSDTAR_STEP}"), &format!("{BSDTAR_STEP}{SYSTEM32_STEP}"));
-    assert_eq!(system32_problems(&before, &WINDOWS), ["job test: checks tar in or before the step that sets the path"]);
-}
-
-#[test]
-fn the_system32_rule_comes_from_the_profile_in_a_fixture() {
-    // The Windows fixture without the step is clean under a profile that does not ask for it.
-    let none = good().replace(SYSTEM32_STEP, "").replace(BSDTAR_STEP, "");
-    assert_eq!(system32_problems(&none, &WINDOWS).len(), 4);
-    assert_clean(system32_problems(&none, &MACOS));
-}
-
 // ---- the installer checks: Windows ----
 
 #[test]
@@ -2653,38 +2487,43 @@ fn a_mac_check_step_that_is_missing_or_commented_is_caught_in_each_job_in_a_fixt
     for (job, runner_arch) in [("build", "arm64"), ("build-intel", "x86_64")] {
         let step = MAC_CHECK_STEP.replace("@ARCH@", runner_arch);
         let none = in_job(&good_mac(), job, &step, "");
-        assert_eq!(installer_check_problems(&none, &MACOS), [format!("job {job}: no check step: no step runs {CODESIGN_VERIFY}")]);
-        let commented = in_job(&good_mac(), job, "            codesign --verify --deep --strict --verbose=2 \"$1\"\n", "            # codesign --verify --deep --strict\n");
-        assert_problem(&installer_check_problems(&commented, &MACOS), &format!("job {job}: no check step"), job);
+        assert_eq!(installer_check_problems(&none, &MACOS), [format!("job {job}: no check step: no step runs {CHECK_SCRIPT}")]);
+        let commented = in_job(&good_mac(), job, "        run: bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"\n", "        run: |\n          # bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"\n          ls\n");
+        assert_eq!(installer_check_problems(&commented, &MACOS), [format!("job {job}: no check step: no step runs {CHECK_SCRIPT}")]);
     }
 }
 
 #[test]
 #[rustfmt::skip]
-fn a_mac_check_step_without_one_of_its_commands_is_caught_in_a_fixture() {
-    // Each command the step must run, taken out of the Intel job's script one at a time.
-    let cases = [
-        ("plutil -extract", "              plutil -extract \"files2.MacOS/$tool\" xml1 -o - \"$1/Contents/_CodeSignature/CodeResources\" >/dev/null\n"),
-        ("hdiutil attach", "          hdiutil attach -nobrowse -readonly -mountpoint \"$mount\" \"$dmg\"\n"),
-        ("lipo -archs", "              test \"$(lipo -archs \"$program\")\" = \"$EXPECTED_ARCH\"\n"),
-        ("vtool -show-build", "              vtool -show-build \"$program\" | awk '$1 == \"minos\" { print $2 }'\n"),
-    ];
-    for (command, line) in cases {
-        let text = in_job(&good_mac(), "build-intel", line, "");
-        assert_problem(&installer_check_problems(&text, &MACOS), &format!("job build-intel: the check step does not run {command}"), command);
-        // The Apple Silicon job still passes.
-        assert!(!installer_check_problems(&text, &MACOS).iter().any(|p| p.starts_with("job build:")));
+fn a_mac_check_step_that_is_not_exactly_the_script_call_is_caught_in_each_job_in_a_fixture() {
+    let call = "        run: bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"\n";
+    // The spelling of the argument does not matter.
+    for ok in ["        run: bash scripts/check-mac-app.sh $EXPECTED_ARCH\n", "        run: 'bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"'\n"] {
+        assert_clean(installer_check_problems(&in_job(&good_mac(), "build", call, ok), &MACOS));
     }
-    // The programs: both must be named, and the `minos` and `$EXPECTED_ARCH` words used.
-    let one_program = in_job(&good_mac(), "build", "for tool in ffmpeg ffprobe; do", "for tool in ffmpeg; do");
-    assert_eq!(installer_check_problems(&one_program, &MACOS), ["job build: the check step does not run ffprobe"]);
-    let no_minos = in_job(&good_mac(), "build", "'$1 == \"minos\" { print $2 }'", "'{ print $2 }'");
-    assert_eq!(installer_check_problems(&no_minos, &MACOS), ["job build: the check step does not run minos"]);
-    let no_arch = in_job(&good_mac(), "build", " = \"$EXPECTED_ARCH\"", " = arm64");
-    assert_eq!(installer_check_problems(&no_arch, &MACOS), ["job build: the check step does not run $EXPECTED_ARCH"]);
-    // The app inside the disk image: the step must look in the folder of the programs.
-    let no_folder = in_job(&in_job(&good_mac(), "build", "            ls -l \"$1/Contents/MacOS\"\n", ""), "build", "Contents/MacOS/$tool", "Contents/Resources/$tool");
-    assert_problem(&installer_check_problems(&no_folder, &MACOS), "job build: the check step does not run Contents/MacOS", "folder");
+    // A call that can pass when the script fails, or checks something else.
+    let wrong_call = [
+        "        run: bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\" || true\n",
+        "        run: bash scripts/check-mac-app.sh\n",
+        "        run: bash scripts/check-mac-app.sh arm64\n",
+        "        run: bash scripts/check-mac-app.sh x86_64\n",
+        "        run: sh scripts/check-mac-app.sh \"$EXPECTED_ARCH\"\n",
+        "        run: bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\" extra\n",
+        "        run: bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"; true\n",
+        "        run: |\n          bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"\n          exit 0\n",
+        "        run: |\n          set +e\n          bash scripts/check-mac-app.sh \"$EXPECTED_ARCH\"\n",
+    ];
+    for job in ["build", "build-intel"] {
+        for wrong in wrong_call {
+            let text = in_job(&good_mac(), job, call, wrong);
+            assert_problem(&installer_check_problems(&text, &MACOS), &format!("job {job}: the check step must run exactly"), wrong);
+        }
+        // A step that cannot fail the job, or may be skipped.
+        for extra in ["        continue-on-error: true\n", "        if: success() || failure()\n"] {
+            let text = in_job(&good_mac(), job, call, &format!("{call}{extra}"));
+            assert_problem(&installer_check_problems(&text, &MACOS), &format!("job {job}: the check step has"), extra);
+        }
+    }
 }
 
 #[test]
@@ -2695,7 +2534,7 @@ fn the_expected_architecture_of_each_mac_job_comes_from_the_profile_in_a_fixture
     assert_eq!(installer_check_problems(&intel, &MACOS), ["job build-intel: the check step's EXPECTED_ARCH is Some(\"arm64\"), not x86_64"]);
     let arm = in_job(&good_mac(), "build", "EXPECTED_ARCH: arm64", "EXPECTED_ARCH: x86_64");
     assert_eq!(installer_check_problems(&arm, &MACOS), ["job build: the check step's EXPECTED_ARCH is Some(\"x86_64\"), not arm64"]);
-    let unset = in_job(&good_mac(), "build", "      - env:\n          EXPECTED_ARCH: arm64\n        run: |\n", "      - run: |\n");
+    let unset = in_job(&good_mac(), "build", "      - env:\n          EXPECTED_ARCH: arm64\n        run: bash", "      - run: bash");
     assert_eq!(installer_check_problems(&unset, &MACOS), ["job build: the check step's EXPECTED_ARCH is None, not arm64"]);
     // A quoted value is the same value.
     let quoted = in_job(&good_mac(), "build", "EXPECTED_ARCH: arm64", "EXPECTED_ARCH: 'arm64'");
@@ -2715,7 +2554,7 @@ fn a_mac_check_step_out_of_order_is_caught_in_a_fixture() {
     // A check in the test job does not count for the installer jobs.
     let wrong_job = in_job(&good_mac(), "build", &arm_check, "")
         .replacen(FMT_STEP, &format!("{FMT_STEP}{arm_check}"), 1);
-    assert_eq!(installer_check_problems(&wrong_job, &MACOS), [format!("job build: no check step: no step runs {CODESIGN_VERIFY}")]);
+    assert_eq!(installer_check_problems(&wrong_job, &MACOS), [format!("job build: no check step: no step runs {CHECK_SCRIPT}")]);
 }
 
 // ---- the cache saves only from main ----
