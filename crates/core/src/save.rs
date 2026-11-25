@@ -142,12 +142,18 @@ fn no_name(reason: &str) -> io::Error {
 }
 
 /// A new empty temporary file in `folder`. A leading dot hides it while it is
-/// there.
+/// there. On Unix it gets the mode of any new file (`0o666` less the umask),
+/// not the owner-only mode a temporary file has by default, because it becomes
+/// the saved video.
 fn temp_file_in(folder: &Path) -> io::Result<NamedTempFile> {
-    Builder::new()
-        .prefix(".optimized-")
-        .suffix(".part")
-        .tempfile_in(folder)
+    let mut builder = Builder::new();
+    builder.prefix(".optimized-").suffix(".part");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+    builder.tempfile_in(folder)
 }
 
 /// The extension of `path` in lower case, `mp4` when it has none.

@@ -769,6 +769,43 @@ fn a_result_of_the_same_size_counts_as_not_smaller() {
     assert_eq!(fs::read(&outcome.path).unwrap(), b"ORIGINL");
 }
 
+/// The permission bits of `path`.
+#[cfg(unix)]
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// A saved encode has the mode any new file gets (`0o666` minus the umask),
+/// not the owner-only mode of a temporary file. The umask is not read with
+/// `libc::umask`, which can only be read by setting it and would race with the
+/// files the other test threads create: a plain `File::create` in the same
+/// folder shows what the process's umask gives a new file.
+#[cfg(unix)]
+#[test]
+fn a_saved_encode_has_the_mode_of_a_new_file() {
+    let (out, outcome) = save_fake_seven("a.mp4", 8);
+    assert!(!outcome.kept_original);
+    let plain = out.path().join("plain-new-file");
+    fs::File::create(&plain).unwrap();
+    assert_eq!(mode_of(&outcome.path), mode_of(&plain));
+}
+
+/// The negative: under the usual umasks (022, 002) a new file is readable by
+/// others, so a saved encode that is `0o600` is wrong. Under a umask of 077
+/// there is nothing to tell apart, and the test has nothing to assert.
+#[cfg(unix)]
+#[test]
+fn a_saved_encode_is_not_owner_only_when_the_umask_allows_others() {
+    let (out, outcome) = save_fake_seven("a.mp4", 8);
+    let plain = out.path().join("plain-new-file");
+    fs::File::create(&plain).unwrap();
+    if mode_of(&plain) & 0o077 != 0 {
+        assert_ne!(mode_of(&outcome.path), 0o600);
+        assert_ne!(mode_of(&outcome.path) & 0o044, 0);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_result_one_byte_smaller_is_written() {
