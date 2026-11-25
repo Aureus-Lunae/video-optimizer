@@ -11,3 +11,8 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 serde = { version = "1", features = ["derive"] }
+
+# The SDK's CREATE_NO_WINDOW, which a test compares with tools.rs's own constant.
+# Tests only, so the shipped code gains no feature.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
