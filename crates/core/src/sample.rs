@@ -42,10 +42,12 @@ pub(crate) fn refused(error: PathError) -> RunError {
     }
 }
 
-/// Remove a file this module was making. A file that is not there is the
+/// Remove a file that is not wanted: one this module was making, or (in the
+/// app) a sample that a newer one replaced. A file that is not there is the
 /// normal case (ffmpeg was stopped before it created it), and one that cannot
-/// be removed leaves nothing better to do than report the original error.
-fn discard(path: &Path) {
+/// be removed leaves nothing better to do than go on: the caller reports its
+/// own outcome.
+pub fn discard(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
