@@ -1,0 +1,41 @@
+# The ffmpeg 9.1 builds the bundle takes along, pinned: every archive is named
+# by its timestamped release path (never a "latest" redirect) and by its
+# SHA-256, which `cargo run -p video-optimizer-xtask -- ffmpeg` checks before
+# it extracts anything. crates/xtask reads this file; its checker refuses a
+# hash that is not 64 lower-case hex digits and a URL that is not https.
+#
+# Each archive gives one program. `inner` is the program's path inside the
+# archive and defaults to the program's name.
+#
+# Where the hashes come from:
+#   macOS    the .sha256 files that ffmpeg.martin-riedl.de publishes beside each
+#            zip (Release Build, 9.1), checked against the downloaded zips.
+#   Windows  the SHA-256 that the GyanD/codexffmpeg release 9.1 lists for the
+#            asset, checked against the downloaded zip.
+#
+# Martin Riedl stops making macOS Intel release builds in January 2027. The
+# pinned 9.1 Intel build keeps working; a later ffmpeg upgrade for Intel needs
+# another source.
+
+version = "9.1"
+
+[[target]]
+triple = "aarch64-apple-darwin"
+archives = [
+  { url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1795207104_9.1/ffmpeg.zip", sha256 = "1f66e9a690a7f1c9e60b012379f8869c11818d1797f45b21dbb2f2564ba61ae1", program = "ffmpeg" },
+  { url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1795207104_9.1/ffprobe.zip", sha256 = "6ef2df5f575042923a28537ab37adf936f28bf3e7b85de23a1447ed447ec1dbd", program = "ffprobe" },
+]
+
+[[target]]
+triple = "x86_64-apple-darwin"
+archives = [
+  { url = "https://ffmpeg.martin-riedl.de/download/macos/amd64/1795212433_9.1/ffmpeg.zip", sha256 = "35b3d82cccc2c1d644d49d15f5e57eb913a08ef68f798042c90eecec62c51f1e", program = "ffmpeg" },
+  { url = "https://ffmpeg.martin-riedl.de/download/macos/amd64/1795212433_9.1/ffprobe.zip", sha256 = "41ca7b7cba7992e33f1da3f1bf54db8ec103a4d387b1bfac3162062e8b1074ad", program = "ffprobe" },
+]
+
+[[target]]
+triple = "x86_64-pc-windows-msvc"
+archives = [
+  { url = "https://github.com/GyanD/codexffmpeg/releases/download/9.1/ffmpeg-9.1-essentials_build.zip", sha256 = "b9bbbb3acece000cbeec994f856649354e52c773807841e78908374b24d658fd", program = "ffmpeg", inner = "ffmpeg-9.1-essentials_build/bin/ffmpeg.exe" },
+  { url = "https://github.com/GyanD/codexffmpeg/releases/download/9.1/ffmpeg-9.1-essentials_build.zip", sha256 = "b9bbbb3acece000cbeec994f856649354e52c773807841e78908374b24d658fd", program = "ffprobe", inner = "ffmpeg-9.1-essentials_build/bin/ffprobe.exe" },
+]

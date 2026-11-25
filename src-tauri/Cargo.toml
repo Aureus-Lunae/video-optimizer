@@ -26,3 +26,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true }
 # Each loaded video gets a work folder, deleted when the video is replaced.
 tempfile = { workspace = true }
+
+[dev-dependencies]
+# Reads .cargo/config.toml as TOML in the config checks (the static C runtime).
+# The version already in Cargo.lock (tauri's build tools use it).
+toml = "1.2.0"

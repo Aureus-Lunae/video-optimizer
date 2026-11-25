@@ -3763,6 +3763,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "toml 1.2.0+spec-1.1.0",
  "video-optimizer-core",
 ]
 
@@ -3784,6 +3785,15 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "video-optimizer-xtask"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "tempfile",
+ "toml 1.2.0+spec-1.1.0",
 ]
 
 [[package]]
