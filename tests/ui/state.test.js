@@ -188,6 +188,13 @@ test('before-ready of another video, or with no video, is ignored', () => {
   assert.equal(reduce(empty, { type: 'before-ready', video: 3 }), empty);
 });
 
+test('a before-ready that comes twice asks nothing the second time', () => {
+  const state = sampled();
+  assert.equal(reduce(state, { type: 'before-ready', video: 3 }), state);
+  // It would otherwise await a sample for a request that was answered.
+  assert.equal(state.sampling, false);
+});
+
 test('before-ready during a save marks the clip ready and starts no sample', () => {
   const state = run(loaded(), { type: 'save-started' }, { type: 'before-ready', video: 3 });
   assert.equal(state.video.beforeReady, true);
