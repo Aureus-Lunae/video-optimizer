@@ -38,6 +38,7 @@ Decided during execution (2026-11-25):
 - **Tests that cannot fail:** "Fix + change RED rule (Recommended)". After the third test that passed without its code, every implementer's RED run must fail on one of the test's own assertions against a typed stub, not on a missing name.
 - **CLI Ctrl-C:** "Handle Ctrl-C (Recommended)". This replaces Task 8's "Ctrl-C is not handled specially": a Ctrl-C handler sets the save's cancel flag, so ffmpeg stops and the partial file is deleted (exit code 130).
 - **ffmpeg missing at app start:** "Native message, then exit (Recommended)". A system message box says the app cannot start because ffmpeg and ffprobe were not found beside it, then the app exits.
+- **Repo is public:** "Don't have the free minutes, and while it is for private internal use, we don't care if others use it." The GitHub repo `Aureus-Lunae/video-optimizer` stays public. This reopens the licence question the spec's handoff put off ("If it is ever shared outside, the licence question comes back first"); it is open.
 - **Weak tests found by the final review:** "Include them (Recommended)". The close/exit and file-chooser tests are fixed in the final fix wave.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
