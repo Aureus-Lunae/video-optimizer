@@ -576,7 +576,7 @@ fn tools_that_run(program: &str) -> Tools {
 fn a_failing_ffprobe_with_no_message_is_still_a_reason() {
     let dir = TempDir::new().unwrap();
     let path = clips::make(dir.path(), clip("a.mp4"));
-    let result = probe(&tools_that_run("/bin/false"), &path);
+    let result = probe(&tools_that_run("/usr/bin/false"), &path);
     let Err(ProbeError::Unreadable(reason)) = result else {
         panic!("{result:?}");
     };
@@ -589,7 +589,7 @@ fn an_ffprobe_that_prints_nothing_is_unreadable() {
     let dir = TempDir::new().unwrap();
     let path = clips::make(dir.path(), clip("a.mp4"));
     // Exit status 0 and no JSON: the answer is not taken for a video.
-    let result = probe(&tools_that_run("/bin/true"), &path);
+    let result = probe(&tools_that_run("/usr/bin/true"), &path);
     assert!(
         matches!(result, Err(ProbeError::Unreadable(_))),
         "{result:?}"
