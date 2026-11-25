@@ -14,7 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tauri::{AppHandle, DragDropEvent, Emitter, Manager, Window, WindowEvent, Wry};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, RunEvent, Window, WindowEvent, Wry};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 use video_optimizer_core::tools::Tools;
 
@@ -135,6 +135,14 @@ fn is_closing(event: &WindowEvent) -> bool {
     )
 }
 
+/// Whether `event` is the app ending. Quitting from the macOS menu (Cmd+Q)
+/// ends the app without any window event, so the session is closed here as
+/// well; asking to exit and the exit itself both count (closing twice is
+/// harmless).
+fn ends_the_app(event: &RunEvent) -> bool {
+    matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit)
+}
+
 /// The paths of a drop, if `event` is one: all of them, so that loading can
 /// refuse several.
 fn dropped_paths(event: &WindowEvent) -> Option<Vec<PathBuf>> {
@@ -171,7 +179,7 @@ pub fn run() -> ExitCode {
     };
     // The dialog plugin must be registered for its Rust API; its commands
     // stay unreachable, as the window has no dialog permission.
-    let result = tauri::Builder::default()
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let emit = emitter(app.handle().clone());
@@ -188,14 +196,22 @@ pub fn run() -> ExitCode {
             cancel_save
         ])
         .on_window_event(on_window_event)
-        .run(tauri::generate_context!());
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
         Err(error) => {
             eprintln!("video-optimizer: the window could not start: {error}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
-    }
+    };
+    // The app can end without a window event (Cmd+Q on macOS): the session
+    // is closed then too, so no ffmpeg or partial file is left behind.
+    app.run(|app, event| {
+        if ends_the_app(&event) {
+            shared(app).close(CLOSE_WAIT);
+        }
+    });
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
@@ -239,6 +255,27 @@ mod tests {
             drop_of(&["/v/a.mp4"]),
         ] {
             assert!(!is_closing(&event), "{event:?}");
+        }
+    }
+
+    #[test]
+    fn the_app_exiting_closes_the_session() {
+        // Cmd+Q on macOS ends the app without a window event. `ExitRequested`
+        // has a private field and cannot be built here; it is matched with
+        // `{ .. }` next to `Exit`.
+        assert!(ends_the_app(&RunEvent::Exit));
+    }
+
+    #[test]
+    fn other_app_events_do_not_close_the_session() {
+        // A window's own events are handled by `on_window_event`; Tauri does
+        // not let a test build `RunEvent::WindowEvent`.
+        for event in [
+            RunEvent::Ready,
+            RunEvent::Resumed,
+            RunEvent::MainEventsCleared,
+        ] {
+            assert!(!ends_the_app(&event), "{event:?}");
         }
     }
 

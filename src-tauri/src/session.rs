@@ -25,8 +25,8 @@ use video_optimizer_core::settings::{Audio, Crf, Settings};
 use video_optimizer_core::tools::Tools;
 
 use crate::events::{
-    BeforeReady, Event, Notice, SampleFailed, SaveProgress, file_name_of, refusal, sample,
-    save_finished, video_loaded,
+    BeforeReady, Event, Notice, SampleFailed, SaveProgress, file_name_of, io_reason, refusal,
+    sample, save_finished, video_loaded, without_folders,
 };
 
 #[cfg(test)]
@@ -109,6 +109,32 @@ struct Session {
     save_job: Option<CancelFlag>,
     /// How many job threads have not ended yet.
     running: usize,
+    /// The app is closing: no command starts anything any more, so
+    /// [`Shared::close`] never waits for a job that started after it.
+    closing: bool,
+}
+
+impl Session {
+    /// Every folder the backend knows of: those of ffmpeg and ffprobe, the
+    /// work root, the chosen output folder, and the current video's own
+    /// folder and work folder. No reason sent to the window names them
+    /// ([`without_folders`]).
+    fn folders(&self) -> Vec<PathBuf> {
+        let tools = [&self.tools.ffmpeg, &self.tools.ffprobe]
+            .into_iter()
+            .filter_map(|program| program.parent());
+        let video = self
+            .video
+            .iter()
+            .flat_map(|loaded| [loaded.info.path.parent(), Some(loaded.work.path())])
+            .flatten();
+        tools
+            .chain(video)
+            .chain([self.work_root.as_path()])
+            .chain(self.folder.as_deref())
+            .map(Path::to_path_buf)
+            .collect()
+    }
 }
 
 /// The session, shared by the commands, the window's events and the job
@@ -168,6 +194,7 @@ impl Shared {
                 sample_job: None,
                 save_job: None,
                 running: 0,
+                closing: false,
             }),
             changed: Condvar::new(),
             emit,
@@ -209,10 +236,14 @@ impl Shared {
     /// (`failed`) leaves the current video as it is. Otherwise the old video
     /// and its jobs are stopped and dropped, the new one gets the next id and
     /// a work folder, `video` is sent, and its before clip is made on a job
-    /// thread (`before-ready`, or `failed` when it cannot be made).
+    /// thread (`before-ready`, or `failed` when it cannot be made). Once the
+    /// app is closing, nothing happens at all.
     pub fn load(self: &Arc<Self>, paths: &[PathBuf]) {
         let mut guard = self.lock();
         let session = &mut *guard;
+        if session.closing {
+            return;
+        }
         if session.save_job.is_some() {
             self.send(Event::Notice(Notice::Saving));
             return;
@@ -224,7 +255,7 @@ impl Shared {
         let info = match probe(&session.tools, path) {
             Ok(info) => info,
             Err(error) => {
-                self.send(Event::Notice(refusal(path, &error)));
+                self.send(Event::Notice(refusal(path, &error, &session.folders())));
                 return;
             }
         };
@@ -234,8 +265,10 @@ impl Shared {
         {
             Ok(work) => Arc::new(work),
             Err(error) => {
+                // tempfile's text names the folder; only the system's
+                // sentence goes to the window.
                 self.send(Event::Notice(Notice::Failed {
-                    reason: format!("no work folder could be made: {error}"),
+                    reason: format!("no work folder could be made: {}", io_reason(&error)),
                 }));
                 return;
             }
@@ -265,7 +298,7 @@ impl Shared {
     }
 
     /// The before clip job of video `id`. Its outcome is kept only while the
-    /// video is still the current one.
+    /// video is still the current one. A failure's reason names no folder.
     fn run_before(
         &self,
         id: u64,
@@ -278,6 +311,7 @@ impl Shared {
         // A replaced video's folder goes as soon as no job holds it.
         drop(work);
         let mut session = self.lock();
+        let folders = session.folders();
         let Some(loaded) = session.video.as_mut().filter(|loaded| loaded.id == id) else {
             return;
         };
@@ -287,7 +321,7 @@ impl Shared {
                 self.send(Event::BeforeReady(BeforeReady { video: id }));
             }
             Err(error) => {
-                let reason = error.to_string();
+                let reason = without_folders(&error.to_string(), &folders);
                 loaded.before = Before::Failed(reason.clone());
                 self.send(Event::Notice(Notice::Failed { reason }));
             }
@@ -296,10 +330,12 @@ impl Shared {
 
     /// Make the sample of request `request` of `video` at `crf` and `audio`
     /// (JSON values, checked by the core; a refusal is the error and starts
-    /// nothing). A `video` that is not the current one, and a request that is
-    /// not above the last one for this video, start nothing. Otherwise the
-    /// running sample is cancelled and this one starts on a job thread, once
-    /// the before clip exists: `sample`, or `sample-failed`.
+    /// nothing). Nothing starts once the app is closing, nor while a save
+    /// runs (a request asked then does not count as asked), nor for a `video`
+    /// that is not the current one or a request that is not above the last
+    /// one for this video. Otherwise the running sample is cancelled and this
+    /// one starts on a job thread, once the before clip exists: `sample`, or
+    /// `sample-failed`.
     pub fn make_sample(
         self: &Arc<Self>,
         video: u64,
@@ -310,6 +346,9 @@ impl Shared {
         let settings = settings_from_json(crf, audio)?;
         let mut guard = self.lock();
         let session = &mut *guard;
+        if session.closing || session.save_job.is_some() {
+            return Ok(());
+        }
         let Some(loaded) = session.video.as_mut().filter(|loaded| loaded.id == video) else {
             return Ok(());
         };
@@ -391,7 +430,7 @@ impl Shared {
     /// request is told: its sample replaces (and deletes) the older sample
     /// file, or `sample-failed` is sent. A request that was replaced, or whose
     /// video was, is not told; a sample it finished all the same (its cancel
-    /// came too late) is deleted.
+    /// came too late) is deleted. A failure's reason names no folder.
     fn finish_sample(
         &self,
         video: u64,
@@ -400,6 +439,7 @@ impl Shared {
         result: Result<SampleResult, RunError>,
     ) {
         let mut session = self.lock();
+        let folders = session.folders();
         let Some(loaded) = end_sample_job(&mut session, video, request) else {
             if let Ok(late) = result {
                 discard(&late.path);
@@ -424,21 +464,24 @@ impl Shared {
             Err(error) => self.send(Event::SampleFailed(SampleFailed {
                 video,
                 request,
-                reason: error.to_string(),
+                reason: without_folders(&error.to_string(), &folders),
             })),
         }
     }
 
     /// Save the whole of `video` at `crf` and `audio` (checked as for
     /// [`Shared::make_sample`]) in the chosen folder, or next to the
-    /// original. A `video` that is not the current one, and a save while a
-    /// save runs, start nothing. Otherwise the running sample is cancelled
-    /// and the save runs on a job thread: `save-progress`, then `save-done`,
-    /// `save-cancelled` or `save-failed`.
+    /// original. Nothing starts once the app is closing, for a `video` that
+    /// is not the current one, or while a save runs. Otherwise the running
+    /// sample is cancelled and the save runs on a job thread:
+    /// `save-progress`, then `save-done`, `save-cancelled` or `save-failed`.
     pub fn save(self: &Arc<Self>, video: u64, crf: &Value, audio: &Value) -> Result<(), String> {
         let settings = settings_from_json(crf, audio)?;
         let mut guard = self.lock();
         let session = &mut *guard;
+        if session.closing {
+            return Ok(());
+        }
         let Some(loaded) = session.video.as_ref().filter(|loaded| loaded.id == video) else {
             return Ok(());
         };
@@ -453,14 +496,23 @@ impl Shared {
         session.save_job = Some(cancel.clone());
         let tools = session.tools.clone();
         let folder = session.folder.clone();
+        let folders = session.folders();
         self.spawn_job(session, "save", move |shared| {
-            shared.run_save(&tools, &info, settings, folder.as_deref(), &cancel);
+            shared.run_save(
+                &tools,
+                &info,
+                settings,
+                folder.as_deref(),
+                &cancel,
+                &folders,
+            );
         });
         Ok(())
     }
 
     /// The save job. `save_job` is cleared before the outcome is sent, so a
-    /// drop that follows `save-done` is loaded.
+    /// drop that follows `save-done` is loaded. A failure's reason names none
+    /// of `folders` (those known when the save started, its own included).
     fn run_save(
         &self,
         tools: &Tools,
@@ -468,12 +520,13 @@ impl Shared {
         settings: Settings,
         folder: Option<&Path>,
         cancel: &CancelFlag,
+        folders: &[PathBuf],
     ) {
         let result = save(tools, info, settings, folder, cancel, &mut |percent| {
             self.send(Event::SaveProgress(SaveProgress { percent }));
         });
         self.lock().save_job = None;
-        self.send(save_finished(info.bytes, result));
+        self.send(save_finished(info.bytes, result, folders));
     }
 
     /// Stop the running save, if there is one. Its thread removes the partial
@@ -502,13 +555,15 @@ impl Shared {
         self.lock().folder = None;
     }
 
-    /// The window is closing: stop every job, wait at most `wait` for them
-    /// to end, then drop the video, which deletes its work folder. A stopped
-    /// save removes its partial file before its thread ends, so the folder it
-    /// was saving in is as it was once this returns (unless a job outlasted
-    /// `wait`).
+    /// The window is closing or the app is ending: from now on no command
+    /// starts anything; stop every job, wait at most `wait` for them to end,
+    /// then drop the video, which deletes its work folder. A stopped save
+    /// removes its partial file before its thread ends, so the folder it was
+    /// saving in is as it was once this returns (unless a job outlasted
+    /// `wait`). Calling it again finds nothing to stop.
     pub fn close(&self, wait: Duration) {
-        let session = self.lock();
+        let mut session = self.lock();
+        session.closing = true;
         if let Some(save) = &session.save_job {
             save.cancel();
         }
@@ -561,6 +616,10 @@ impl Shared {
     /// Wait at most `wait` until no job runs; whether none does.
     fn wait_idle(&self, wait: Duration) -> bool {
         self.wait_for_jobs(self.lock(), wait).1
+    }
+
+    fn is_closing(&self) -> bool {
+        self.lock().closing
     }
 
     fn current_video(&self) -> Option<u64> {
@@ -751,6 +810,15 @@ mod tests {
         names
     }
 
+    /// `reason` names no folder: not the test folder (where the clips, the
+    /// work root and the outputs are), and no path separator at all.
+    fn assert_no_path(h: &Harness, reason: &str) {
+        let dir = h.dir.path().to_string_lossy();
+        assert!(!reason.contains(dir.as_ref()), "{reason}");
+        assert!(!reason.contains(std::path::MAIN_SEPARATOR), "{reason}");
+        assert!(!reason.contains("file:"), "{reason}");
+    }
+
     /// Wait until `done` holds, for at most [`WAIT`].
     fn wait_until(what: &str, done: impl Fn() -> bool) {
         let start = Instant::now();
@@ -833,7 +901,9 @@ mod tests {
         match h.next_notice() {
             Notice::Refused { name, reason } => {
                 assert_eq!(name, "notes.mp4");
-                assert!(!reason.is_empty());
+                // ffprobe's own sentence, without the path it puts first.
+                assert_eq!(reason, "Invalid data found when processing input");
+                assert_no_path(&h, &reason);
             }
             other => panic!("expected refused, got {other:?}"),
         }
@@ -872,7 +942,11 @@ mod tests {
         fs::remove_dir_all(h.dir.path().join("work")).unwrap();
         h.shared.load(&[b]);
         match h.next_notice() {
-            Notice::Failed { reason } => assert!(!reason.is_empty()),
+            Notice::Failed { reason } => {
+                assert!(!reason.is_empty());
+                // tempfile names the folder it tried; the window is not told.
+                assert_no_path(&h, &reason);
+            }
             other => panic!("expected failed, got {other:?}"),
         }
         h.idle();
@@ -1060,6 +1134,7 @@ mod tests {
             "{}",
             failed.reason
         );
+        assert_no_path(&h, &failed.reason);
         h.idle();
         assert!(h.logged("sample").is_empty());
         assert_eq!(h.shared.sample_path(id, 1), None);
@@ -1155,6 +1230,65 @@ mod tests {
         assert_eq!(failed.reason, "ffmpeg failed: the before clip broke");
         h.idle();
         assert!(h.logged("before-ready").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_before_clip_failure_names_no_folder() {
+        // ffmpeg's last line starts with the file it was writing, in the work
+        // folder, as `file:<path>`.
+        let dir = TempDir::new().unwrap();
+        let mut tools = super::fake_ffmpeg::script_tools(
+            dir.path(),
+            "for a; do last=$a; done\necho \"$last: Disk quota exceeded\" >&2\nexit 1",
+        );
+        tools.ffprobe = real_tools().ffprobe;
+        let mut h = Harness::with_tools(tools);
+        h.shared.load(&[h.clip("a.mp4")]);
+        let id = h.next_video();
+        let Notice::Failed { reason } = h.next_notice() else {
+            panic!("expected failed")
+        };
+        assert_eq!(reason, "ffmpeg failed: before.mp4: Disk quota exceeded");
+        assert_no_path(&h, &reason);
+        h.shared.make_sample(id, 1, &json!(28), &keep()).unwrap();
+        let failed = h.next_sample_failed(1);
+        assert_no_path(&h, &failed.reason);
+    }
+
+    #[test]
+    fn a_sample_failure_names_no_folder() {
+        let mut h = Harness::new();
+        let path = h.clip("a.mp4");
+        let id = h.load_ready(&path);
+        h.shared.lock().sample_job = Some((1, CancelFlag::new()));
+        let work = h
+            .shared
+            .before_path(id)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let reason = format!(
+            "file:{}: Invalid argument; input file:{}",
+            work.join("sample-1.mp4").display(),
+            path.display()
+        );
+        h.shared.finish_sample(
+            id,
+            1,
+            Settings::default(),
+            Err(RunError::Failed {
+                code: Some(1),
+                reason,
+            }),
+        );
+        let failed = h.next_sample_failed(1);
+        assert_eq!(
+            failed.reason,
+            "ffmpeg failed: sample-1.mp4: Invalid argument; input a.mp4"
+        );
+        assert_no_path(&h, &failed.reason);
     }
 
     /// Tools whose ffmpeg takes `seconds` and then fails, and the real
@@ -1336,11 +1470,18 @@ mod tests {
         else {
             unreachable!()
         };
+        // ffmpeg's bare reason, as in "No space left on device".
         assert!(
-            failed.reason.starts_with("ffmpeg failed"),
+            !failed.reason.starts_with("ffmpeg failed"),
             "{}",
             failed.reason
         );
+        assert!(
+            failed.reason.contains("No such file or directory"),
+            "{}",
+            failed.reason
+        );
+        assert_no_path(&h, &failed.reason);
         h.idle();
         assert!(!h.shared.saving());
         assert_eq!(listing(h.dir.path()), ["work"]);
@@ -1400,6 +1541,38 @@ mod tests {
         h.idle();
         assert!(h.logged("sample").is_empty());
         assert_eq!(h.shared.sample_path(id, 1), None);
+    }
+
+    #[test]
+    fn a_sample_asked_during_a_save_starts_nothing() {
+        let mut h = Harness::new();
+        let id = h.load_ready(&h.long_clip("long.mp4"));
+        h.shared.save(id, &json!(28), &keep()).unwrap();
+        assert_eq!(h.shared.make_sample(id, 1, &json!(30), &keep()), Ok(()));
+        assert!(
+            h.shared.sample_job().is_none(),
+            "no sample runs next to the save"
+        );
+        h.shared.cancel_save();
+        h.next("save-cancelled", |e| matches!(e, Event::SaveCancelled(_)));
+        h.idle();
+        assert!(h.logged("sample").is_empty());
+        assert!(h.logged("sample-failed").is_empty());
+        // The refused request did not count: request 1 still starts.
+        h.shared.make_sample(id, 1, &json!(30), &keep()).unwrap();
+        assert_eq!(h.next_sample(1).crf, 30);
+    }
+
+    #[test]
+    fn a_sample_asked_after_the_save_starts() {
+        let mut h = Harness::new();
+        let id = h.load_ready(&h.clip("a.mp4"));
+        h.shared.save(id, &json!(28), &keep()).unwrap();
+        h.next("save-done", |e| matches!(e, Event::SaveDone(_)));
+        h.idle();
+        h.shared.make_sample(id, 1, &json!(28), &keep()).unwrap();
+        assert!(h.shared.sample_job().is_some());
+        h.next_sample(1);
     }
 
     #[test]
@@ -1468,6 +1641,61 @@ mod tests {
         );
         h.idle();
         assert!(h.logged("sample").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_starts_once_closing_has_begun() {
+        // The before clip's "ffmpeg" is a shell whose `sleep` child keeps the
+        // pipes open for 2 seconds after the shell is killed, so `close` is
+        // still waiting for that job, with the video still loaded, while the
+        // commands below arrive. `close` is called only once the script runs,
+        // or the job would end on its cancel before starting it.
+        let dir = TempDir::new().unwrap();
+        let started = dir.path().join("started");
+        let body = format!("touch '{}'\nsleep 2\nexit 1", started.display());
+        let mut tools = super::fake_ffmpeg::script_tools(dir.path(), &body);
+        tools.ffprobe = real_tools().ffprobe;
+        let mut h = Harness::with_tools(tools);
+        let b = h.clip("b.mp4");
+        h.shared.load(&[h.clip("a.mp4")]);
+        let id = h.next_video();
+        wait_until("the before clip's ffmpeg runs", || started.exists());
+        let closing = {
+            let shared = Arc::clone(&h.shared);
+            std::thread::spawn(move || shared.close(CLOSE_WAIT))
+        };
+        wait_until("close began", || h.shared.is_closing());
+        assert_eq!(h.shared.current_video(), Some(id), "close still waits");
+        h.shared.load(std::slice::from_ref(&b));
+        assert_eq!(h.shared.make_sample(id, 1, &json!(28), &keep()), Ok(()));
+        assert_eq!(h.shared.save(id, &json!(28), &keep()), Ok(()));
+        assert!(h.shared.sample_job().is_none(), "no sample started");
+        assert!(!h.shared.saving(), "no save started");
+        assert_eq!(h.shared.current_video(), Some(id), "b was not loaded");
+        closing.join().unwrap();
+        assert!(
+            h.shared.wait_idle(Duration::ZERO),
+            "close left no job running"
+        );
+        h.idle();
+        assert_eq!(h.logged("video").len(), 1, "{:?}", h.log);
+        assert!(h.logged("sample").is_empty());
+        assert!(h.logged("save-done").is_empty());
+        assert!(h.logged("save-cancelled").is_empty());
+    }
+
+    #[test]
+    fn the_same_commands_start_jobs_before_closing() {
+        let mut h = Harness::new();
+        let id = h.load_ready(&h.clip("a.mp4"));
+        h.shared.make_sample(id, 1, &json!(28), &keep()).unwrap();
+        assert!(h.shared.sample_job().is_some());
+        h.next_sample(1);
+        h.shared.save(id, &json!(28), &keep()).unwrap();
+        assert!(h.shared.saving());
+        h.next("save-done", |e| matches!(e, Event::SaveDone(_)));
+        assert_eq!(h.load_ready(&h.clip("b.mp4")), 2);
     }
 
     #[test]
