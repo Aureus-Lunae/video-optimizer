@@ -35,7 +35,7 @@ fn usable_duration(info: &VideoInfo) -> Option<f64> {
 }
 
 /// A path the arguments refused is a failed run that never started ffmpeg.
-fn refused(error: PathError) -> RunError {
+pub(crate) fn refused(error: PathError) -> RunError {
     RunError::Failed {
         code: None,
         reason: error.to_string(),

@@ -25,8 +25,8 @@ pub enum Codec {
 }
 
 /// What to put in a clip. `Clip::default()` is a 2 second, 640x360, 10 frames
-/// per second H.264 clip with no audio, no rotation and no cover art; give it
-/// a `name`.
+/// per second H.264 clip with no audio, no rotation, no cover art and x264's
+/// own CRF; give it a `name`.
 ///
 /// An odd `width` or `height` is made as a crop of the next even size, in
 /// `yuv444p` (the test pattern and the 4:2:0 formats only have even sizes).
@@ -50,6 +50,9 @@ pub struct Clip {
     /// A JPEG picture attached as a second video stream, the way a music file
     /// carries its cover. Only mp4 and mov hold it.
     pub cover_art: bool,
+    /// The x264 CRF of an H.264 clip (`0` is lossless, `40` is coarse); `None`
+    /// leaves it at x264's own 23. Ignored for the other codecs.
+    pub crf: Option<u8>,
 }
 
 impl Default for Clip {
@@ -64,6 +67,7 @@ impl Default for Clip {
             codec: Codec::H264,
             rotate: None,
             cover_art: false,
+            crf: None,
         }
     }
 }
@@ -145,14 +149,20 @@ pub fn make(dir: &Path, spec: Clip) -> PathBuf {
         a.push(format!("format=yuv444p,crop={}:{}", spec.width, spec.height).into());
     }
     match spec.codec {
-        Codec::H264 => a.extend(args([
-            "-c:v:0",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-pix_fmt:v:0",
-            "yuv420p",
-        ])),
+        Codec::H264 => {
+            a.extend(args([
+                "-c:v:0",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt:v:0",
+                "yuv420p",
+            ]));
+            if let Some(crf) = spec.crf {
+                a.extend(args(["-crf:v:0"]));
+                a.push(crf.to_string().into());
+            }
+        }
         Codec::ProRes => a.extend(args(["-c:v:0", "prores_ks"])),
         Codec::Mpeg4 => a.extend(args(["-c:v:0", "mpeg4"])),
     }
