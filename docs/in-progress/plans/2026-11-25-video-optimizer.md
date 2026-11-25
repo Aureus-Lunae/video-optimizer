@@ -33,6 +33,13 @@ Decided 2026-11-25:
 - **An original the window cannot play:** "Show a playable copy (Recommended)". Only for such a file, the "before" is a near-lossless H.264 copy of the first 10 seconds (CRF 10), labelled "Original (converted for display)". Ruled out: "Show a message instead", "Refuse the file".
 - **Plan approved:** "yes" (2026-11-25), in answer to "Does the plan capture what you want, and should it run subagent-driven or native?" with subagent-driven recommended. It runs subagent-driven, in a fresh session. The "Decided in this plan (my calls)" list under Global Constraints was shown in that message and approved with it.
 
+Decided during execution (2026-11-25):
+
+- **Tests that cannot fail:** "Fix + change RED rule (Recommended)". After the third test that passed without its code, every implementer's RED run must fail on one of the test's own assertions against a typed stub, not on a missing name.
+- **CLI Ctrl-C:** "Handle Ctrl-C (Recommended)". This replaces Task 8's "Ctrl-C is not handled specially": a Ctrl-C handler sets the save's cancel flag, so ffmpeg stops and the partial file is deleted (exit code 130).
+- **ffmpeg missing at app start:** "Native message, then exit (Recommended)". A system message box says the app cannot start because ffmpeg and ffprobe were not found beside it, then the app exits.
+- **Weak tests found by the final review:** "Include them (Recommended)". The close/exit and file-chooser tests are fixed in the final fix wave.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Tauri window app and a command line that re-encode one video to an H.264 MP4 at a chosen CRF (20 to 36), with a 10-second before/after comparison, never touching or overwriting anything.
