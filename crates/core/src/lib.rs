@@ -5,5 +5,6 @@ pub mod probe;
 pub mod progress;
 pub mod run;
 pub mod sample;
+pub mod save;
 pub mod settings;
 pub mod tools;
