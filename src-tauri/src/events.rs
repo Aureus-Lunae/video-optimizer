@@ -418,9 +418,16 @@ mod tests {
         }
     }
 
-    /// `/home/me/My Videos`, in the platform's own form.
+    /// An absolute folder in the platform's own form: `/home/me/My Videos`,
+    /// or `C:\\Users\\me\\My Videos` on Windows, where a path without a drive
+    /// is not absolute and `refusal` would put the current drive in front.
     fn my_videos() -> PathBuf {
-        Path::new("/home/me").join("My Videos")
+        let home = if cfg!(windows) {
+            r"C:\Users\me"
+        } else {
+            "/home/me"
+        };
+        Path::new(home).join("My Videos")
     }
 
     #[test]
