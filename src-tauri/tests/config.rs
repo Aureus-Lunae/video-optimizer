@@ -1,7 +1,8 @@
 //! Guards on the window's settings, so a later change cannot widen them
 //! silently: the capability grants the six app commands and event listening
-//! only, the content security policy stays strict (only `media-src` names the
-//! `media` scheme), and the window and bundle are as the plan sets them.
+//! only, the content security policy stays strict (only `media-src` and
+//! `connect-src` name the `media` scheme, and only `media-src` allows `blob:`),
+//! and the window and bundle are as the plan sets them.
 //!
 //! Each checker is also run on a fixture that breaks it, so a checker that
 //! reports nothing cannot pass for one that works.
@@ -169,9 +170,17 @@ const EXPECTED_CSP: &[(&str, &[&str])] = &[
     ("script-src", &["'self'"]),
     ("style-src", &["'self'"]),
     ("img-src", &["'self'"]),
-    ("media-src", &["media:", "http://media.localhost"]),
+    ("media-src", &["media:", "http://media.localhost", "blob:"]),
     ("font-src", &["'self'"]),
-    ("connect-src", &["ipc:", "http://ipc.localhost"]),
+    (
+        "connect-src",
+        &[
+            "ipc:",
+            "http://ipc.localhost",
+            "media:",
+            "http://media.localhost",
+        ],
+    ),
     ("object-src", &["'none'"]),
     ("base-uri", &["'none'"]),
     ("form-action", &["'none'"]),
@@ -194,7 +203,9 @@ fn directives(csp: &str) -> Vec<(String, Vec<String>)> {
 }
 
 /// What makes a policy weaker or other than [`EXPECTED_CSP`]: any
-/// `'unsafe-…'` source, a wildcard, `data:` or `blob:` anywhere; a directive
+/// `'unsafe-…'` source, a wildcard or `data:` anywhere, `blob:` in any
+/// directive but `media-src` (the window plays a clip it fetched from a
+/// `blob:` address there; WebKitGTK cannot play the `media` scheme itself); a directive
 /// missing, given twice or not expected; a directive with other sources than
 /// expected (compared without case, in any order).
 fn csp_problems(csp: &str) -> Vec<String> {
@@ -206,7 +217,7 @@ fn csp_problems(csp: &str) -> Vec<String> {
             if lower.starts_with("'unsafe-")
                 || lower.contains('*')
                 || lower == "data:"
-                || lower == "blob:"
+                || (lower == "blob:" && name != "media-src")
             {
                 problems.push(format!("{name} {source}"));
             }
@@ -246,7 +257,7 @@ fn configured_csp() -> String {
 }
 
 #[test]
-fn csp_allows_media_only_from_the_media_scheme() {
+fn csp_allows_the_media_scheme_and_blobs_only_where_the_window_needs_them() {
     let csp = configured_csp();
     assert_eq!(csp_problems(&csp), Vec::<String>::new());
     let parsed = directives(&csp);
@@ -256,16 +267,38 @@ fn csp_allows_media_only_from_the_media_scheme() {
         .map(|(_, sources)| sources)
         .collect();
     assert_eq!(media.len(), 1, "{parsed:?}");
-    assert_eq!(*media[0], ["media:", "http://media.localhost"]);
-    // Only media-src names the media scheme.
+    assert_eq!(*media[0], ["media:", "http://media.localhost", "blob:"]);
+    // The window fetches a clip through the media scheme (connect-src), so
+    // only media-src and connect-src name it; only media-src names blob:.
     for (name, sources) in &parsed {
-        if name != "media-src" {
+        if name != "media-src" && name != "connect-src" {
             assert!(
                 !sources.iter().any(|s| s.contains("media")),
                 "{name} {sources:?}"
             );
         }
+        if name != "media-src" {
+            assert!(
+                !sources.iter().any(|s| s.contains("blob")),
+                "{name} {sources:?}"
+            );
+        }
     }
+    let connect: Vec<&Vec<String>> = parsed
+        .iter()
+        .filter(|(name, _)| name == "connect-src")
+        .map(|(_, sources)| sources)
+        .collect();
+    assert_eq!(connect.len(), 1, "{parsed:?}");
+    assert_eq!(
+        *connect[0],
+        [
+            "ipc:",
+            "http://ipc.localhost",
+            "media:",
+            "http://media.localhost"
+        ]
+    );
 }
 
 #[test]
@@ -273,15 +306,19 @@ fn csp_is_exactly_the_planned_string() {
     assert_eq!(
         configured_csp(),
         "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; \
-         media-src media: http://media.localhost; font-src 'self'; \
-         connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; \
+         media-src media: http://media.localhost blob:; font-src 'self'; \
+         connect-src ipc: http://ipc.localhost media: http://media.localhost; \
+         object-src 'none'; base-uri 'none'; \
          form-action 'none'; frame-src 'none'"
     );
 }
 
 #[test]
 fn a_csp_with_media_src_star_is_caught_in_a_fixture() {
-    let csp = configured_csp().replace("media-src media: http://media.localhost", "media-src *");
+    let csp = configured_csp().replace(
+        "media-src media: http://media.localhost blob:",
+        "media-src *",
+    );
     assert!(csp.contains("media-src *"), "the fixture was built");
     let problems = csp_problems(&csp);
     assert!(problems.contains(&"media-src *".to_owned()), "{problems:?}");
@@ -303,9 +340,15 @@ fn a_csp_with_unsafe_sources_or_a_changed_directive_is_caught_in_a_fixture() {
         ),
         ("img-src 'self'", "img-src 'self' data:", "img-src data:"),
         (
-            "media-src media: http://media.localhost",
             "media-src media: http://media.localhost blob:",
-            "media-src blob:",
+            "media-src media: http://media.localhost blob: data:",
+            "media-src data:",
+        ),
+        ("img-src 'self'", "img-src 'self' blob:", "img-src blob:"),
+        (
+            "connect-src ipc: http://ipc.localhost media: http://media.localhost",
+            "connect-src ipc: http://ipc.localhost media: http://media.localhost blob:",
+            "connect-src blob:",
         ),
     ] {
         let csp = good.replace(from, to);
@@ -313,8 +356,50 @@ fn a_csp_with_unsafe_sources_or_a_changed_directive_is_caught_in_a_fixture() {
         let problems = csp_problems(&csp);
         assert!(problems.contains(&wanted.to_owned()), "{to}: {problems:?}");
     }
-    let without_media = good.replace("media-src media: http://media.localhost; ", "");
+    let without_media = good.replace("media-src media: http://media.localhost blob:; ", "");
+    assert_ne!(without_media, good, "the fixture removed media-src");
     assert!(csp_problems(&without_media).contains(&"missing media-src".to_owned()));
+    // Any other new source in media-src or connect-src changes the directive.
+    for (from, to, directive) in [
+        (
+            "media-src media: http://media.localhost blob:",
+            "media-src media: http://media.localhost blob: https://example.com",
+            "media-src is",
+        ),
+        (
+            "connect-src ipc: http://ipc.localhost media: http://media.localhost",
+            "connect-src ipc: http://ipc.localhost media: http://media.localhost https://example.com",
+            "connect-src is",
+        ),
+    ] {
+        let csp = good.replace(from, to);
+        assert_ne!(csp, good, "the fixture changed {from}");
+        assert!(
+            csp_problems(&csp).iter().any(|p| p.starts_with(directive)),
+            "{to}: {:?}",
+            csp_problems(&csp)
+        );
+    }
+    // The policy from before the Linux fallback is no longer the policy.
+    let without_blob = good.replace(" blob:", "");
+    assert_ne!(without_blob, good, "the fixture removed blob:");
+    assert!(
+        csp_problems(&without_blob)
+            .iter()
+            .any(|p| p.starts_with("media-src is")),
+        "media-src without blob: is caught"
+    );
+    let without_fetch = good.replace(" media: http://media.localhost; object-src", "; object-src");
+    assert_ne!(
+        without_fetch, good,
+        "the fixture removed the connect-src additions"
+    );
+    assert!(
+        csp_problems(&without_fetch)
+            .iter()
+            .any(|p| p.starts_with("connect-src is")),
+        "connect-src without the media scheme is caught"
+    );
     let remote = good.replace("img-src 'self'", "img-src 'self' https://example.com");
     assert!(
         csp_problems(&remote)

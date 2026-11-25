@@ -10,7 +10,16 @@ import { readFileSync } from 'node:fs';
 import { startWindow } from '../../ui/window.js';
 import { crfValueText, crfWord } from '../../ui/quality.js';
 import { toActual, toFit, zoomLimits } from '../../ui/zoom.js';
-import { fakePage, fakeResizeObservers, fakeTauri, settle, strictTimers } from './fake-window.js';
+import {
+  fakeFetch,
+  fakeObjectUrls,
+  fakePage,
+  fakeResizeObservers,
+  fakeTauri,
+  fakeUnload,
+  settle,
+  strictTimers,
+} from './fake-window.js';
 
 // ---- helpers ----
 
@@ -36,14 +45,20 @@ function start({ refuse = {}, refuseListen = [], hold = [], answers = {}, resize
   const timers = strictTimers();
   const observers = fakeResizeObservers();
   const logged = [];
+  const fetcher = fakeFetch();
+  const urls = fakeObjectUrls();
+  const unload = fakeUnload();
   const { listening } = startWindow({
     doc,
     tauri,
     timers,
     ResizeObserver: resizeObserver ? observers.ResizeObserver : undefined,
+    fetch: fetcher.fetch,
+    urls,
+    onUnload: unload.onUnload,
     log: (...values) => logged.push(values),
   });
-  return { doc, el: doc.byId, tauri, timers, observers, logged, listening };
+  return { doc, el: doc.byId, tauri, timers, observers, fetcher, urls, unload, logged, listening };
 }
 
 /** The backend's `video` payload for Showreel V1.mp4. */
@@ -1200,4 +1215,190 @@ test('the fake records a markup write when one is made, so the check can fail', 
     ['innerHTML', '<b>x</b>'],
     ['insertAdjacentHTML', '<i>y</i>'],
   ]);
+});
+
+// ---- Linux: clips played from blob: addresses ----
+
+const BEFORE_3 = 'media://localhost/3-before';
+const SAMPLE_1 = 'media://localhost/3-sample-1';
+const SAMPLE_2 = 'media://localhost/3-sample-2';
+
+/** The webview reports that it cannot play the scheme (MEDIA_ERR_SRC_NOT_SUPPORTED) on `id`. */
+function cannotPlayScheme(w, id) {
+  w.el(id).error = { code: 4 };
+  w.el(id).fire('error');
+}
+
+/** A video whose before clip was refused by the webview and fetched: the before clip plays from a blob address. */
+async function readyOnLinux(w) {
+  await ready(w);
+  cannotPlayScheme(w, 'videoBefore');
+  w.fetcher.answer(BEFORE_3);
+  await settle();
+}
+
+test('a webview that plays the media scheme never fetches a clip', async () => {
+  const w = start();
+  assert.equal(w.unload.handlers.length, 1, 'the window asks to hear when the page goes away');
+  await sampled(w);
+  w.el('videoBefore').error = { code: 3 };
+  w.el('videoBefore').fire('error');
+  await settle();
+  assert.equal(w.el('videoBefore').getAttribute('src'), BEFORE_3);
+  assert.equal(w.el('videoAfter').getAttribute('src'), SAMPLE_1);
+  assert.deepEqual(w.fetcher.calls, []);
+  assert.deepEqual(w.urls.created, []);
+});
+
+test('a before clip the webview cannot play from the scheme is fetched and played from a blob address', async () => {
+  const w = start();
+  await ready(w);
+  cannotPlayScheme(w, 'videoBefore');
+  assert.deepEqual(w.fetcher.calls, [BEFORE_3]);
+  w.fetcher.answer(BEFORE_3);
+  await settle();
+  assert.equal(w.urls.created.length, 1);
+  assert.equal(w.el('videoBefore').getAttribute('src'), w.urls.created[0].url);
+  assert.match(w.el('videoBefore').getAttribute('src'), /^blob:/);
+});
+
+test('after the switch the sample goes straight to a blob address, joins the original and plays with it', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.el('play').click();
+  await settle();
+  w.el('videoBefore').time = 2.5;
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  assert.deepEqual(w.fetcher.calls, [BEFORE_3, SAMPLE_1]);
+  assert.deepEqual(w.el('videoAfter').srcWrites, [], 'the scheme address is not tried first');
+  assert.equal(w.el('videoAfter').plays, 0, 'nothing plays before the bytes are there');
+  w.fetcher.answer(SAMPLE_1);
+  await settle();
+  const sample = w.el('videoAfter');
+  assert.deepEqual(sample.srcWrites, [w.urls.created[1].url]);
+  assert.equal(sample.currentTime, 2.5);
+  assert.equal(sample.paused, false);
+  assert.equal(sample.hidden, false);
+});
+
+test('a sample that is replaced while its bytes are coming never becomes an object URL', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  moveSlider(w, '30');
+  w.timers.advance(400);
+  w.tauri.emit('sample', sampleOf(2, { crf: 30 }));
+  await settle();
+  assert.deepEqual(w.fetcher.calls, [BEFORE_3, SAMPLE_1, SAMPLE_2]);
+  w.fetcher.answer(SAMPLE_1);
+  await settle();
+  assert.equal(w.urls.created.length, 1, 'only the before clip has an object URL');
+  assert.equal(w.el('videoAfter').getAttribute('src'), null);
+  w.fetcher.answer(SAMPLE_2);
+  await settle();
+  assert.equal(w.urls.created.length, 2);
+  assert.equal(w.urls.created[1].blob.clip, SAMPLE_2);
+  assert.equal(w.el('videoAfter').getAttribute('src'), w.urls.created[1].url);
+});
+
+test('each new sample revokes the object URL of the one it replaces', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  w.fetcher.answer(SAMPLE_1);
+  await settle();
+  const first = w.urls.created[1].url;
+  moveSlider(w, '30');
+  w.timers.advance(400);
+  w.tauri.emit('sample', sampleOf(2, { crf: 30 }));
+  await settle();
+  w.fetcher.answer(SAMPLE_2);
+  await settle();
+  assert.deepEqual(w.urls.revoked, [first]);
+  assert.equal(w.urls.live().length, 2, 'the before clip and the new sample');
+});
+
+test('a new video clears both clips and revokes their object URLs', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  w.fetcher.answer(SAMPLE_1);
+  await settle();
+  assert.equal(w.urls.live().length, 2);
+  w.tauri.emit('video', videoOf({ video: 4, name: 'b.mp4' }));
+  await settle();
+  assert.deepEqual(w.urls.live(), []);
+  assert.equal(w.urls.revoked.length, 2);
+  for (const id of ['videoBefore', 'videoAfter']) {
+    assert.equal(w.el(id).getAttribute('src'), null, id);
+  }
+});
+
+test('the object URLs are revoked when the page goes away', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  w.fetcher.answer(SAMPLE_1);
+  await settle();
+  assert.equal(w.urls.live().length, 2);
+  w.unload.unload();
+  assert.deepEqual(w.urls.live(), []);
+});
+
+test('a sample whose fetch fails shows that the sample could not be played and sets no source', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  w.fetcher.answer(SAMPLE_1, { status: 404 });
+  await settle();
+  assert.match(w.el('statusText').textContent, /^The sample could not be played: .*404/);
+  assert.equal(w.el('videoAfter').getAttribute('src'), null);
+  assert.equal(w.urls.created.length, 1, 'only the before clip');
+});
+
+test('a sample whose fetch is refused shows that the sample could not be played', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  w.fetcher.fail(SAMPLE_1, new TypeError('Failed to fetch'));
+  await settle();
+  assert.match(w.el('statusText').textContent, /^The sample could not be played: .*Failed to fetch/);
+});
+
+test('a sample that was replaced does not report its failed fetch', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  w.tauri.emit('sample', sampleOf(1));
+  await settle();
+  moveSlider(w, '30');
+  w.timers.advance(400);
+  w.tauri.emit('sample', sampleOf(2, { crf: 30 }));
+  await settle();
+  w.fetcher.fail(SAMPLE_1, new TypeError('late'));
+  await settle();
+  assert.doesNotMatch(w.el('statusText').textContent, /failed|could not/);
+});
+
+test('a before clip whose fetch fails shows the status of an original that could not be prepared', async () => {
+  const w = start();
+  await ready(w);
+  cannotPlayScheme(w, 'videoBefore');
+  w.fetcher.answer(BEFORE_3, { status: 500 });
+  await settle();
+  assert.match(w.el('statusText').textContent, /^The original could not be prepared: .*500/);
+  assert.equal(w.el('videoBefore').getAttribute('src'), BEFORE_3, 'no blob source was set');
+  assert.deepEqual(w.urls.created, []);
+});
+
+test('a fetch that works leaves the status alone', async () => {
+  const w = start();
+  await readyOnLinux(w);
+  assert.doesNotMatch(w.el('statusText').textContent, /failed|could not/);
 });

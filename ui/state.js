@@ -16,6 +16,10 @@
 //   { type: 'fill', on }            Fill window on or off
 //   { type: 'zoom', zoom }          'fit' or 'actual' (Zoom 100%)
 //   { type: 'save-started' }        Save was pressed
+//   { type: 'clip-failed', video, request, reason }
+//                                   the clip of the sample that arrived could not be
+//                                   fetched for playing (clips.js); `request` is the
+//                                   shown sample's
 //
 // The texts the window shows are composed here from the backend's data: the
 // status line is `state.status`. An action that does not apply (a stale
@@ -173,6 +177,26 @@ function sampleFailed(state, action) {
   return { ...state, sampling: false, status: `The sample failed: ${text(action.reason)}`, keepStatus: false };
 }
 
+/**
+ * The clip of the sample on show could not be fetched. The sample's figures
+ * stay (the sample exists); the status says it cannot be played. It counts
+ * only for the sample shown now, and not while a save runs (the status says
+ * Saving then).
+ */
+function clipFailed(state, action) {
+  const shown = state.sample;
+  const current =
+    shown !== null &&
+    state.video !== null &&
+    state.saving === null &&
+    action.video === state.video.video &&
+    shown.video === action.video &&
+    shown.request === action.request;
+  return current
+    ? { ...state, status: `The sample could not be played: ${text(action.reason)}`, keepStatus: false }
+    : state;
+}
+
 function saveStarted(state) {
   if (state.video === null || state.saving !== null) {
     return state;
@@ -258,6 +282,8 @@ export function reduce(state, action) {
       return sampleArrived(state, action);
     case 'sample-failed':
       return sampleFailed(state, action);
+    case 'clip-failed':
+      return clipFailed(state, action);
     case 'save-progress':
       return saveProgress(state, action);
     case 'save-done':

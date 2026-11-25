@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatAudio, formatFps, formatLength, formatMB, formatPosition, formatPsnr } from '../../ui/format.js';
+import {
+  formatAudio,
+  formatFps,
+  formatLength,
+  formatMB,
+  formatPosition,
+  formatPsnr,
+  reasonText,
+} from '../../ui/format.js';
 
 const NOT_A_NUMBER = [null, undefined, NaN, -1, Infinity, '5', [5], {}];
 
@@ -100,4 +108,15 @@ test('formatPosition gives the position and the total', () => {
 test('formatPosition shows unknown for the part that is not a time', () => {
   assert.equal(formatPosition(null, 10), 'unknown / 0:10');
   assert.equal(formatPosition(3, NaN), '0:03 / unknown');
+});
+
+test('reasonText gives the text of a string refusal or of an Error', () => {
+  assert.equal(reasonText('no window'), 'no window');
+  assert.equal(reasonText(new TypeError('Failed to fetch')), 'Failed to fetch');
+});
+
+test('reasonText turns anything else into text, never an object', () => {
+  assert.equal(reasonText(404), '404');
+  assert.equal(reasonText(null), 'null');
+  assert.equal(reasonText({ message: 'x' }), '[object Object]');
 });
