@@ -619,6 +619,8 @@ impl Shared {
         self.wait_for_jobs(self.lock(), wait).1
     }
 
+    /// Only the Unix-only close test reads it.
+    #[cfg(unix)]
     fn is_closing(&self) -> bool {
         self.lock().closing
     }
