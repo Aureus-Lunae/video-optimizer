@@ -16,12 +16,15 @@
 //! percent of the encode goes to stderr as `\r42%`, and only when stderr is a
 //! terminal. The exit code is 0 when it is done (also when the original was
 //! kept), 1 when the video failed (it could not be read, or the encode
-//! failed, and then no file is left behind), and 2 when the usage was wrong.
+//! failed, and then no file is left behind), 2 when the usage was wrong, and
+//! 130 when Ctrl-C stopped it.
 //!
-//! Ctrl-C is not handled here. ffmpeg gets the same signal and stops, but the
-//! program is ended without running its cleanup, so the hidden
-//! `.optimized-*.part` file next to the result stays: `tempfile` removes it
-//! only when the program ends normally.
+//! Ctrl-C sets the save's cancel flag. The save then stops ffmpeg (on Windows
+//! ffmpeg runs without a console and does not get the Ctrl-C itself) and
+//! deletes its hidden `.optimized-*.part` file, so the folder is as it was;
+//! `cancelled` goes to stderr and nothing to stdout. A Ctrl-C that comes after
+//! the save has finished changes nothing: the file is kept and its line is
+//! printed.
 
 mod args;
 mod report;
@@ -51,14 +54,15 @@ fn main() -> ExitCode {
         Ok(tools) => tools,
         Err(error) => return failed(&error),
     };
-    let info = match probe(&tools, &file) {
-        Ok(info) => info,
-        Err(error) => return failed(&error),
+    let cancel = CancelFlag::new();
+    on_ctrl_c(&cancel);
+    let info = match ending(probe(&tools, &file), cancel.is_cancelled()) {
+        Ending::Done(info) => info,
+        Ending::Cancelled => return cancelled(),
+        Ending::Failed(error) => return failed(&error),
     };
 
     let mut progress = Progress::new(io::stderr(), io::stderr().is_terminal());
-    // Nothing sets the flag: Ctrl-C ends the program, as the top comment says.
-    let cancel = CancelFlag::new();
     let saved = save(
         &tools,
         &info,
@@ -68,8 +72,8 @@ fn main() -> ExitCode {
         &mut |percent| progress.report(percent),
     );
     progress.finish();
-    match saved {
-        Ok(outcome) => {
+    match ending(saved, cancel.is_cancelled()) {
+        Ending::Done(outcome) => {
             println!(
                 "{}",
                 output_line(
@@ -81,8 +85,44 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Err(error) => failed(&error),
+        Ending::Cancelled => cancelled(),
+        Ending::Failed(error) => failed(&error),
     }
+}
+
+/// How a step of the run ends.
+#[derive(Debug, PartialEq, Eq)]
+enum Ending<T, E> {
+    Done(T),
+    Cancelled,
+    Failed(E),
+}
+
+/// The ending of a step, given whether Ctrl-C has set the cancel flag. A step
+/// that failed after Ctrl-C was cancelled: ffmpeg was stopped by the flag, or
+/// (in a terminal, where the whole process group gets the signal) ended by
+/// the Ctrl-C itself before the flag was looked at. A step that finished is
+/// done, even when Ctrl-C came after it.
+fn ending<T, E>(result: Result<T, E>, cancelled: bool) -> Ending<T, E> {
+    match result {
+        Ok(value) => Ending::Done(value),
+        Err(_) if cancelled => Ending::Cancelled,
+        Err(error) => Ending::Failed(error),
+    }
+}
+
+/// Make Ctrl-C set `cancel` instead of ending the program. When the handler
+/// cannot be set (the system refuses it), Ctrl-C keeps its default, which
+/// ends the program, and the run goes on.
+fn on_ctrl_c(cancel: &CancelFlag) {
+    let cancel = cancel.clone();
+    let _ = ctrlc::set_handler(move || cancel.cancel());
+}
+
+/// Say that Ctrl-C stopped the run, and exit with 130 (128 + SIGINT).
+fn cancelled() -> ExitCode {
+    eprintln!("video-optimizer: cancelled");
+    ExitCode::from(130)
 }
 
 /// Print the reason and the usage, and exit with 2.
@@ -95,4 +135,32 @@ fn usage_error(error: &UsageError) -> ExitCode {
 fn failed(error: &dyn Display) -> ExitCode {
     eprintln!("video-optimizer: {error}");
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_step_that_failed_after_ctrl_c_is_cancelled() {
+        assert_eq!(
+            ending::<u8, &str>(Err("ffmpeg failed: signal 2"), true),
+            Ending::Cancelled
+        );
+        assert_eq!(
+            ending::<u8, &str>(Err("cancelled"), true),
+            Ending::Cancelled
+        );
+    }
+
+    #[test]
+    fn a_finished_step_and_a_failure_without_ctrl_c_are_not_cancelled() {
+        // A save that finished before Ctrl-C was seen has written its file.
+        assert_eq!(ending::<u8, &str>(Ok(7), true), Ending::Done(7));
+        assert_eq!(ending::<u8, &str>(Ok(7), false), Ending::Done(7));
+        assert_eq!(
+            ending::<u8, &str>(Err("ffmpeg failed: boom"), false),
+            Ending::Failed("ffmpeg failed: boom")
+        );
+    }
 }

@@ -45,8 +45,10 @@ between launches.
 
 1. Drop one video on the window, or press "Choose video". Dropping several
    files uses none and says `One video at a time`.
-2. The picture shows the before and after next to each other, split by a
-   divider, or one at a time at full size. Every number and setting is in the
+2. The picture shows the before and after in one of two views: Before /
+   after shows the picture at full size, split by a divider you move, the
+   original on one side and the sample on the other; Side by side shows the
+   two next to each other. Every number and setting is in the
    column on the right, none below the picture; "Hide settings" folds it away.
 3. Move the **Quality** slider (20 to 36) and choose **Audio**. A new sample
    is made a moment after the slider stops moving.
@@ -85,13 +87,14 @@ optimized-promo.mov: original kept: result was not smaller
 
 The percent of the encode goes to stderr as `\r42%`, and only when stderr is
 a terminal. The exit code is 0 when it is done (also when the original was
-kept), 1 when the video failed (then no file is left behind), and 2 when the
-arguments were wrong.
+kept), 1 when the video failed (then no file is left behind), 2 when the
+arguments were wrong, and 130 when Ctrl-C stopped it.
 
-**Ctrl-C** is not handled. ffmpeg gets the same signal and stops, but the
-program is ended without running its clean-up, so the hidden
-`.optimized-*.part` file next to the result stays (`tempfile` removes it only
-when the program ends normally). Delete it by hand.
+**Ctrl-C** stops the encode: the program stops ffmpeg, deletes the hidden
+`.optimized-*.part` file it was writing, prints `cancelled` to stderr and
+nothing to stdout, so the folder is as it was. This holds on Windows too,
+where ffmpeg runs without a console and does not get the Ctrl-C itself. A
+Ctrl-C that comes after the file is saved changes nothing.
 
 Build it with `cargo build --release -p video-optimizer-cli`; the program is
 `target/release/video-optimizer`. It needs `ffmpeg` and `ffprobe`: next to the
@@ -118,7 +121,8 @@ the licence question comes back first.
 ## Building and testing
 
 You need Rust 1.90 or newer (<https://rustup.rs>) and Node 22 (the window
-script tests need Node 21 or later). On Linux, Tauri also needs a few system
+script tests need Node 22.7 or later: they use `import` without a
+`package.json`, which relies on module-syntax detection). On Linux, Tauri also needs a few system
 packages; see <https://tauri.app/start/prerequisites/>. There is no Linux
 build of the app.
 
@@ -144,10 +148,11 @@ cargo run --locked -p video-optimizer-xtask -- ffmpeg --dest /tmp/ffmpeg
 VIDEO_OPTIMIZER_TOOLS_DIR=/tmp/ffmpeg cargo test --workspace
 ```
 
-The test that cancels a running encode (`crates/core/tests/run.rs`) finds
-ffmpeg's process with `pgrep` (procps), so `pgrep` has to be installed. macOS
-has it, and the Mac runners of the CI use it; on Linux install `procps`. The
-test is compiled for Unix only, so Windows needs no `pgrep`.
+The tests that cancel a running encode (`crates/core/tests/run.rs`, and the
+Ctrl-C tests in `crates/cli/tests/cli.rs`) find ffmpeg's process with `pgrep`
+(procps), so `pgrep` has to be installed. macOS has it, and the Mac runners of
+the CI use it; on Linux install `procps`. These tests are compiled for Unix
+only, so Windows needs no `pgrep`.
 
 ## Getting the installers
 

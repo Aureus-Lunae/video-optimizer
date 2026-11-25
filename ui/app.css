@@ -305,12 +305,17 @@ html {
 }
 
 /* "Original" top left, "Sample, CRF 28" top right (top left in Side by
-   side), on an opaque dark surface so they read over any picture. */
+   side), on an opaque dark surface so they read over any picture. Each
+   keeps to its own half of the picture (its own picture in Side by side)
+   and wraps there, so a long "Original (converted for display)" never runs
+   into the other tag, nor is it cut, in the narrowest window. */
 .stage__tag {
   position: absolute;
   top: 0.5rem;
   z-index: 2;
+  max-width: calc(50% - 0.75rem);
   padding: 0.125rem 0.5rem;
+  overflow-wrap: anywhere;
   border-radius: 0.25rem;
   background: rgb(0 0 0 / 0.75);
   color: #ffffff;
@@ -325,6 +330,10 @@ html {
 
 .stage__tag.-after {
   right: 0.5rem;
+}
+
+.stage.-sideBySide .stage__tag {
+  max-width: calc(100% - 1rem);
 }
 
 .stage.-sideBySide .stage__tag.-after {
@@ -637,10 +646,12 @@ html {
   gap: 0.5rem;
 }
 
+/* 16 px: the status line carries the errors and the save's result, so it is
+   primary text (also while it floats over the picture). */
 .status__text {
   margin: 0;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 1rem;
   overflow-wrap: anywhere;
 }
 

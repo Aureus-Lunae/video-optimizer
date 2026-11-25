@@ -972,9 +972,6 @@ fn tools_dir_problems(text: &str) -> Vec<String> {
 
 // ---- the installer checks ----
 
-/// What the Windows check step must test, one `test -f` line each: the app
-/// and both programs beside it in the build folder (the NSIS installer takes
-/// them from there).
 /// The script every Mac Installer job runs on its built app and, inside the
 /// mounted disk image, on the app people download; what it refuses is tested in
 /// `check_mac_app.rs`. The job's whole check step is this one call.
@@ -984,6 +981,9 @@ const CHECK_SCRIPT: &str = "scripts/check-mac-app.sh";
 /// step takes from its own `env: EXPECTED_ARCH`.
 const CHECK_CALL: [&str; 3] = ["bash", CHECK_SCRIPT, "$EXPECTED_ARCH"];
 
+/// What the Windows check step must test, one `test -f` line each: the app
+/// and both programs beside it in the build folder (the NSIS installer takes
+/// them from there).
 const WINDOWS_CHECK_LINES: [&str; 3] = [
     "test -f target/release/video-optimizer-app.exe",
     "test -f target/release/ffmpeg.exe",

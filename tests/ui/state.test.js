@@ -93,6 +93,7 @@ test('the window opens with CRF 28, Audio Keep, next to the original, column ope
     sampling: false,
     saving: null,
     status: '',
+    keepStatus: false,
   });
 });
 
@@ -595,6 +596,60 @@ test('a sample cut short by a save is asked again when the save ends', () => {
   }
   // The save's own message is not replaced by the sample's.
   assert.equal(run(busy, { type: 'save-cancelled' }).status, 'Save cancelled');
+});
+
+/** The three ends of a save, each with the status it gives. */
+const SAVE_ENDS = [
+  [{ type: 'save-done', name: 'optimized-a.mp4', bytes: 5_800_000, inputBytes: 68_300_000, keptOriginal: false }, 'Saved optimized-a.mp4 (5.8 MB, 92% smaller)'],
+  [{ type: 'save-failed', reason: 'disk full' }, 'Save failed: disk full'],
+  [{ type: 'save-cancelled' }, 'Save cancelled'],
+];
+
+test('a sample cut short by a save keeps the save message on the status line when it arrives', () => {
+  const busy = run(ready(), { type: 'save-started' });
+  for (const [end, message] of SAVE_ENDS) {
+    const ended = run(busy, end);
+    assert.equal(ended.status, message, end.type);
+    assert.equal(ended.sampling, true, end.type);
+    const arrived = run(ended, sampleAction({ request: ended.request, smallerBy: 61 }));
+    // The sample counts: it is stored and the wait is over.
+    assert.equal(arrived.sampling, false, end.type);
+    assert.ok(arrived.sample !== null && arrived.sample.smallerBy === 61, end.type);
+    assert.equal(arrived.status, message, end.type);
+    // A sample that fails says so: that is news, not a repeat.
+    const failed = run(ended, { type: 'sample-failed', video: 3, request: ended.request, reason: 'x' });
+    assert.equal(failed.status, 'The sample failed: x', end.type);
+  }
+});
+
+test('a before clip that became ready after a save keeps the save message through its sample', () => {
+  const busy = run(loaded(), { type: 'save-started' });
+  for (const [end, message] of SAVE_ENDS) {
+    const asked = run(busy, end, { type: 'before-ready', video: 3 });
+    assert.equal(asked.sampling, true, end.type);
+    assert.equal(asked.status, message, end.type);
+    const arrived = run(asked, sampleAction({ request: asked.request }));
+    assert.equal(arrived.sampling, false, end.type);
+    assert.equal(arrived.status, message, end.type);
+  }
+});
+
+test('a sample asked by a quality or audio change after a save says Sample ready…', () => {
+  const busy = run(ready(), { type: 'save-started' });
+  for (const [end, message] of SAVE_ENDS) {
+    for (const change of [{ type: 'crf', value: 31 }, { type: 'audio', value: 'remove' }]) {
+      const asked = run(busy, end, change);
+      assert.equal(asked.status, 'Making the sample…', `${end.type} ${change.type}`);
+      const arrived = run(asked, sampleAction({ request: asked.request }));
+      assert.notEqual(arrived.status, message, `${end.type} ${change.type}`);
+      assert.equal(arrived.status, 'Sample ready. Save encodes the whole video.', `${end.type} ${change.type}`);
+    }
+  }
+  // A new video after a save starts afresh too.
+  const after = run(busy, SAVE_ENDS[0][0], videoAction({ video: 4 }), { type: 'before-ready', video: 4 });
+  assert.equal(after.status, 'Making the sample…');
+  const arrived = run(after, sampleAction({ video: 4, request: after.request }));
+  assert.equal(arrived.status, 'Sample ready. Save encodes the whole video.');
 });
 
 test('a before clip that became ready during a save gets its sample when the save ends', () => {

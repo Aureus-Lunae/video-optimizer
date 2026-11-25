@@ -118,8 +118,10 @@ pub fn refusal(path: &Path, error: &ProbeError, folders: &[PathBuf]) -> Notice {
 /// and never where they are. A folder goes together with the separator after
 /// it, and with a `file:` before it (how ffmpeg and ffprobe name their
 /// files). The longest folder goes first, so a folder inside another one
-/// leaves nothing behind. A root folder (`/`) is not taken out, as that would
-/// take every separator.
+/// leaves nothing behind. The Unix root folder (`/`) is not taken out, as
+/// that would take every separator: without its trailing separator it is
+/// empty and skipped. A Windows drive root (`C:\`) is taken out, as `C:` with
+/// the separator after it.
 pub fn without_folders(text: &str, folders: &[PathBuf]) -> String {
     let mut folders: Vec<String> = folders
         .iter()

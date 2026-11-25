@@ -1,7 +1,9 @@
 // Zoom and pan maths for the compare picture as pure functions. No DOM here,
 // so the node tests can load it; the window writes the result into the page.
-// Copied from Lunaepix's ui/zoom.js and trimmed to what this app uses: the
-// zoom limits, the "100%" and "Fit" buttons, panning and the divider.
+// Copied from Lunaepix's ui/zoom.js, for the zoom limits, the "100%" and
+// "Fit" buttons, panning and the divider. It still carries Lunaepix's SVG
+// branches (`svg: true` below); this app never sets `svg`, as a video is
+// never an SVG, so they do not run here.
 //
 // A view is `{ scale, x, y }`. `x` and `y` are how far the picture is moved
 // from the centred position in the area, in pixels, so `{ scale: fit, x: 0,
@@ -102,7 +104,7 @@ export function toFit(limits) {
 }
 
 /**
- * Move the picture by `dx`, `dy` pixels (a drag or an arrow key). The picture's
+ * Move the picture by `dx`, `dy` pixels (a drag; no key pans). The picture's
  * edge never passes the area's edge, and a picture smaller than the area stays
  * centred. A delta that is not a number counts as 0.
  */
