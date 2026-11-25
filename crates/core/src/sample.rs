@@ -154,7 +154,11 @@ fn measure_psnr(
 /// copy of an odd-sized source. The sample is padded to even sizes and PSNR
 /// needs equal sizes, and a stream copy cannot be padded, so a padded copy of
 /// the same seconds is made once in `dir` and kept for the later samples. A
-/// run that does not finish leaves no copy, so a copy that exists is whole.
+/// run that is cancelled or fails deletes its copy (unless the delete itself
+/// fails), and a copy that exists is used as it is. It is not checked for
+/// being whole: while a run is still writing it (an older, cancelled sample's
+/// run that has not stopped yet), a newer sample would read a partial copy.
+/// That gives a wrong or unknown PSNR, never a wrong saved file.
 fn psnr_reference(
     tools: &Tools,
     info: &VideoInfo,
