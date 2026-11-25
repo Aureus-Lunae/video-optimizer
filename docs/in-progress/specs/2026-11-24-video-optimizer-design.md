@@ -1,5 +1,7 @@
 # Video optimizer — design
 
+**Owner:** Aureus-Lunae · **Started:** 2026-11-25
+
 ## Handoff
 
 Decided in conversation (2026-11-24). The user's words are quoted as they were said.
@@ -19,7 +21,10 @@ Decided in conversation (2026-11-24). The user's words are quoted as they were s
 - **Name:** "Name also removed. Just call it video optimizer." The app is called "Video optimizer". No other name is used anywhere, including the command line and the repo.
 - **Before/after at full size:** "Single video only, you show it next to eachother,but is it possible to also do a before after so we can see the full sized video?" Both views exist.
 - **Layout like Lunaepix:** "Lunaepic also has all data in a tab that comes in from the right when selected, not below the image." Every piece of data and every setting is in a column on the right, none below the picture.
-- **Layout:** "HTML mockup". The mock-up is [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html). It becomes binding once the user approves it.
+- **Layout:** "HTML mockup". The mock-up is [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html). The user approved it ("Ok, that looks good"), so it is binding.
+- **Spec approved:** "Lets start the work on this." (2026-11-25)
+- **Plan approved:** "yes" (2026-11-25), subagent-driven. The plan is `docs/in-progress/plans/2026-11-25-video-optimizer.md`; it settles the ffmpeg builds (9.1: Martin Riedl for macOS, Gyan "essentials" for Windows).
+- **An original the window cannot play:** asked what the window does with a file it cannot play (Apple ProRes, or HEVC on some Windows PCs), the user answered "Show a playable copy (Recommended)". Only for such a file, the "before" is a near-lossless H.264 copy of the first 10 seconds (CRF 10), labelled "Original (converted for display)". Ruled out: "Show a message instead", "Refuse the file".
 - **My calls, not decisions:** the default choice is CRF 28; the slider moves in steps of 1; audio keep/remove stays as a setting; the right column folds away with "Hide settings" as in Lunaepix (my reading of "comes in from the right when selected").
 - Put off: AV1/WebM output, HEVC output, a brew-style install.
 
@@ -78,6 +83,7 @@ Fixed: `-preset slow`, `-pix_fmt yuv420p`, `-movflags +faststart`. The size is n
 - Both videos play, pause and seek together, with one play button and one position bar. The sample is kept in step with the original; a drift above one frame is corrected.
 - **Fill window** shows the comparison over the whole window; Escape closes it. **Zoom 100%** shows one video pixel per screen pixel, and dragging moves around the picture.
 - Only the 10-second sample is compared, never the full encode.
+- The "before" is the original's first 10 seconds, copied without re-encoding. When the window cannot play the original's format, it is a near-lossless H.264 copy (CRF 10) instead, labelled "Original (converted for display)".
 
 ### The right column
 
@@ -107,7 +113,7 @@ See Lunaepix's `2026-11-13-lunaepix-apple-design.md` and its Windows workflow.
 
 ## Layout
 
-The binding layout is the mock-up [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html) once the user approves it: the picture fills the window, the column on the right holds all data and settings, and the quality is a slider (CRF 20 to 36, step 1) set to 28 when the app opens, with the CRF number and a short word beside it, and "Better quality, bigger file" / "Smaller file" under its two ends. A launch never remembers the last choice (like Lunaepix, "Start fresh").
+The binding layout is the approved mock-up [2026-11-24-video-optimizer-mockup.html](2026-11-24-video-optimizer-mockup.html): the picture fills the window, the column on the right holds all data and settings, and the quality is a slider (CRF 20 to 36, step 1) set to 28 when the app opens, with the CRF number and a short word beside it, and "Better quality, bigger file" / "Smaller file" under its two ends. A launch never remembers the last choice (like Lunaepix, "Start fresh").
 
 ## Tests (positive and negative each)
 
