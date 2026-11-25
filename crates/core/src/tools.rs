@@ -378,10 +378,11 @@ mod tests {
         assert_eq!(output.stdout, b"/dev/null\n");
     }
 
-    /// Only Windows CI runs this. std has no getter for the creation flags,
-    /// so the test pins the constant to the Windows SDK's value and shows
-    /// that a command built the same way still starts and hands back output;
-    /// whether a window flashes only a manual Windows test can show.
+    /// Only Windows CI runs this. It only pins the constant to the Windows
+    /// SDK's value and shows that the command still starts and hands back
+    /// output; it passes just as well without the `creation_flags` call, so it
+    /// does not prove that the console is hidden. std has no getter for the
+    /// creation flags: that is proven by the manual Windows check.
     #[cfg(windows)]
     #[test]
     fn command_hides_the_console() {
