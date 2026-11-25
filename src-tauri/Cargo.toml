@@ -28,6 +28,9 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+# Tauri's mock runtime, so the unit tests get the real window and app events
+# (their private fields cannot be built by hand) and a real dialog builder.
+tauri = { version = "2.12.5", features = ["test"] }
 # Reads .cargo/config.toml as TOML in the config checks (the static C runtime).
 # The version already in Cargo.lock (tauri's build tools use it).
 toml = "1.2.0"

@@ -16,11 +16,11 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tauri::{
-    AppHandle, DragDropEvent, Emitter, Manager, RunEvent, UriSchemeContext, UriSchemeResponder,
-    Window, WindowEvent, Wry,
+    AppHandle, Context, DragDropEvent, Emitter, Manager, RunEvent, Runtime, UriSchemeContext,
+    UriSchemeResponder, Window, WindowEvent, Wry,
 };
-use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
-use video_optimizer_core::tools::Tools;
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath, MessageDialogKind};
+use video_optimizer_core::tools::{Tools, ToolsError};
 
 use events::Event;
 use session::{CLOSE_WAIT, Emit, FolderAnswer, Shared};
@@ -31,6 +31,11 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mkv", "webm", "avi"];
 
 /// What the file chooser calls the filter over [`VIDEO_EXTENSIONS`].
 const VIDEO_FILTER_NAME: &str = "Videos";
+
+/// What the system message box says when the app cannot start because
+/// ffmpeg and ffprobe are not beside it.
+const TOOLS_MISSING: &str =
+    "Video optimizer cannot start: ffmpeg and ffprobe were not found beside the app. Reinstall it.";
 
 /// Everything the backend keeps between calls.
 struct AppState {
@@ -64,6 +69,14 @@ fn file_dialog(app: &AppHandle) -> FileDialogBuilder<Wry> {
     }
 }
 
+/// `dialog` set up as the file chooser for a video: its title, and one filter
+/// named [`VIDEO_FILTER_NAME`] over [`VIDEO_EXTENSIONS`].
+fn video_chooser<R: Runtime>(dialog: FileDialogBuilder<R>) -> FileDialogBuilder<R> {
+    dialog
+        .set_title("Choose a video")
+        .add_filter(VIDEO_FILTER_NAME, VIDEO_EXTENSIONS)
+}
+
 /// A dialog's answer as a path: `None` for a closed dialog, and for an entry
 /// that is not a file path (desktop dialogs give paths only).
 fn one_path(picked: Option<FilePath>) -> Option<PathBuf> {
@@ -77,14 +90,11 @@ fn one_path(picked: Option<FilePath>) -> Option<PathBuf> {
 #[tauri::command(async)]
 fn choose_video(app: AppHandle) {
     let answer = app.clone();
-    file_dialog(&app)
-        .set_title("Choose a video")
-        .add_filter(VIDEO_FILTER_NAME, VIDEO_EXTENSIONS)
-        .pick_file(move |picked| {
-            if let Some(path) = one_path(picked) {
-                shared(&answer).load(&[path]);
-            }
-        });
+    video_chooser(file_dialog(&app)).pick_file(move |picked| {
+        if let Some(path) = one_path(picked) {
+            shared(&answer).load(&[path]);
+        }
+    });
 }
 
 /// Open the folder chooser and answer with the name of the folder a save
@@ -204,15 +214,57 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// Start the window. The app cannot do anything without ffmpeg, so it does
-/// not start when the programs are not found.
-pub fn run() -> ExitCode {
-    let tools = match Tools::locate() {
-        Ok(tools) => tools,
-        Err(error) => {
-            eprintln!("video-optimizer: {error}");
-            return ExitCode::FAILURE;
+/// The programs, or the message to show instead of starting when they were
+/// not found.
+fn tools_or_message(located: Result<Tools, ToolsError>) -> Result<Tools, &'static str> {
+    located.map_err(|ToolsError::NotFound| TOOLS_MISSING)
+}
+
+/// Tell the user why the app cannot start, in a system message box, and
+/// exit with 1 once it is closed. A release build has no terminal for
+/// stderr (Windows) or none that anyone sees (an app opened from Finder), so
+/// without the box the app would end without a word. No window is opened:
+/// the box stands alone.
+///
+/// The dialog plugin shows a message from the event loop, so the app runs
+/// without windows, and a thread of its own waits for the box (blocking
+/// there is allowed; on the main thread it is not) and then ends the app.
+fn cannot_start(mut context: Context<Wry>, message: &'static str) -> ExitCode {
+    eprintln!("video-optimizer: {message}");
+    context.config_mut().app.windows.clear();
+    let built = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                handle
+                    .dialog()
+                    .message(message)
+                    .title("Video optimizer")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                handle.exit(1);
+            });
+            Ok(())
+        })
+        .build(context);
+    match built {
+        Ok(app) => {
+            app.run_return(|_, _| {});
         }
+        Err(error) => eprintln!("video-optimizer: the message could not be shown: {error}"),
+    }
+    ExitCode::FAILURE
+}
+
+/// Start the window. The app cannot do anything without ffmpeg, so when the
+/// programs are not found it says so in a system message box (see
+/// [`cannot_start`]) and exits with 1 instead.
+pub fn run() -> ExitCode {
+    let context = tauri::generate_context!();
+    let tools = match tools_or_message(Tools::locate()) {
+        Ok(tools) => tools,
+        Err(message) => return cannot_start(context, message),
     };
     // The dialog plugin must be registered for its Rust API; its commands
     // stay unreachable, as the window has no dialog permission.
@@ -234,7 +286,7 @@ pub fn run() -> ExitCode {
             cancel_save
         ])
         .on_window_event(on_window_event)
-        .build(tauri::generate_context!());
+        .build(context);
     let app = match built {
         Ok(app) => app,
         Err(error) => {
@@ -254,6 +306,9 @@ pub fn run() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
     use tauri::{PhysicalPosition, PhysicalSize};
 
     use super::*;
@@ -278,11 +333,82 @@ mod tests {
         })
     }
 
+    /// What one event of a run was, and what the two decisions said of it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Seen {
+        kind: &'static str,
+        closing: bool,
+        ends: bool,
+    }
+
+    /// Every event Tauri's mock runtime gives the app when its one window is
+    /// closed, with [`is_closing`] (for a window event) and [`ends_the_app`]
+    /// for each. The mock runtime makes `CloseRequested`, `ExitRequested` and
+    /// `Exit` as Tauri does; a test cannot build the first two itself, as
+    /// they have private fields.
+    fn events_when_the_window_closes() -> Vec<Seen> {
+        let app = mock_builder()
+            .build(mock_context(noop_assets()))
+            .expect("the mock app builds");
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("the mock window builds");
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        let mut idle_turns = 0;
+        app.run(move |_, event| {
+            match &event {
+                // The mock runtime takes a close only while it runs.
+                RunEvent::Ready => window.close().expect("the close is sent"),
+                // It waits a second per idle turn: end a run that hangs.
+                RunEvent::MainEventsCleared => {
+                    idle_turns += 1;
+                    assert!(idle_turns < 10, "the mock app did not end");
+                }
+                _ => {}
+            }
+            let kind = match &event {
+                RunEvent::WindowEvent {
+                    event: WindowEvent::CloseRequested { .. },
+                    ..
+                } => "CloseRequested",
+                RunEvent::WindowEvent {
+                    event: WindowEvent::Destroyed,
+                    ..
+                } => "Destroyed",
+                RunEvent::WindowEvent { .. } => "another window event",
+                RunEvent::ExitRequested { .. } => "ExitRequested",
+                RunEvent::Exit => "Exit",
+                RunEvent::Ready => "Ready",
+                _ => "another app event",
+            };
+            let closing = match &event {
+                RunEvent::WindowEvent { event, .. } => is_closing(event),
+                _ => false,
+            };
+            let ends = ends_the_app(&event);
+            record.lock().unwrap().push(Seen {
+                kind,
+                closing,
+                ends,
+            });
+        });
+        seen.lock().unwrap().clone()
+    }
+
+    /// The one event of `kind` in `seen`.
+    fn the_one(seen: &[Seen], kind: &str) -> Seen {
+        let found: Vec<&Seen> = seen.iter().filter(|s| s.kind == kind).collect();
+        assert_eq!(found.len(), 1, "one {kind} in {seen:?}");
+        *found[0]
+    }
+
     #[test]
     fn a_close_request_and_a_destroyed_window_are_closing() {
+        let seen = events_when_the_window_closes();
+        assert!(the_one(&seen, "CloseRequested").closing, "{seen:?}");
         assert!(is_closing(&WindowEvent::Destroyed));
-        // CloseRequested has a private field; it is matched in `is_closing`
-        // with `{ .. }`, which this test cannot build.
     }
 
     #[test]
@@ -297,17 +423,16 @@ mod tests {
     }
 
     #[test]
-    fn the_app_exiting_closes_the_session() {
-        // Cmd+Q on macOS ends the app without a window event. `ExitRequested`
-        // has a private field and cannot be built here; it is matched with
-        // `{ .. }` next to `Exit`.
-        assert!(ends_the_app(&RunEvent::Exit));
+    fn asking_to_exit_and_the_exit_both_close_the_session() {
+        // Cmd+Q on macOS ends the app without a window event: the session is
+        // closed on the app's own events.
+        let seen = events_when_the_window_closes();
+        assert!(the_one(&seen, "ExitRequested").ends, "{seen:?}");
+        assert!(the_one(&seen, "Exit").ends, "{seen:?}");
     }
 
     #[test]
     fn other_app_events_do_not_close_the_session() {
-        // A window's own events are handled by `on_window_event`; Tauri does
-        // not let a test build `RunEvent::WindowEvent`.
         for event in [
             RunEvent::Ready,
             RunEvent::Resumed,
@@ -315,6 +440,11 @@ mod tests {
         ] {
             assert!(!ends_the_app(&event), "{event:?}");
         }
+        // A window asking to close is the window's to handle
+        // (`on_window_event`); the app is not ending yet.
+        let seen = events_when_the_window_closes();
+        assert!(!the_one(&seen, "CloseRequested").ends, "{seen:?}");
+        assert!(!the_one(&seen, "Ready").ends, "{seen:?}");
     }
 
     #[test]
@@ -342,11 +472,64 @@ mod tests {
         }
     }
 
+    /// A new file dialog of a mock app that has the dialog plugin, as its
+    /// `Debug` text from its `filters` on: the builder's fields are private,
+    /// and `Debug` shows them (before them comes the whole app handle).
+    fn dialog_text(set_up: impl FnOnce(FileDialogBuilder<MockRuntime>) -> String) -> String {
+        let app = mock_builder()
+            .plugin(tauri_plugin_dialog::init())
+            .build(mock_context(noop_assets()))
+            .expect("the mock app builds");
+        let text = set_up(app.dialog().file());
+        let start = text
+            .find("filters: ")
+            .expect("the builder shows its filters");
+        text[start..].to_owned()
+    }
+
     #[test]
-    fn the_file_chooser_lists_exactly_the_six_video_extensions() {
-        assert_eq!(
-            VIDEO_EXTENSIONS,
-            ["mp4", "mov", "m4v", "mkv", "webm", "avi"]
+    fn the_file_chooser_offers_exactly_the_six_video_extensions_as_videos() {
+        let chooser = dialog_text(|dialog| format!("{:?}", video_chooser(dialog)));
+        assert!(
+            chooser.contains(
+                r#"filters: [Filter { name: "Videos", extensions: ["mp4", "mov", "m4v", "mkv", "webm", "avi"] }]"#
+            ),
+            "{chooser}"
         );
+        assert!(
+            chooser.contains(r#"title: Some("Choose a video")"#),
+            "{chooser}"
+        );
+    }
+
+    #[test]
+    fn the_file_chooser_adds_one_filter_to_a_dialog_that_has_none() {
+        // A dialog that is not the video chooser has no filter and no title,
+        // so the text above comes from `video_chooser`.
+        let plain = dialog_text(|dialog| format!("{dialog:?}"));
+        assert!(plain.contains("filters: []"), "{plain}");
+        assert!(plain.contains("title: None"), "{plain}");
+        let chooser = dialog_text(|dialog| format!("{:?}", video_chooser(dialog)));
+        assert_eq!(chooser.matches("Filter {").count(), 1, "{chooser}");
+    }
+
+    #[test]
+    fn missing_programs_give_the_message_to_show() {
+        assert_eq!(
+            tools_or_message(Err(ToolsError::NotFound)),
+            Err(
+                "Video optimizer cannot start: ffmpeg and ffprobe were not found beside the app. \
+                 Reinstall it."
+            )
+        );
+    }
+
+    #[test]
+    fn found_programs_start_the_app_with_no_message() {
+        let tools = Tools {
+            ffmpeg: PathBuf::from("/app/ffmpeg"),
+            ffprobe: PathBuf::from("/app/ffprobe"),
+        };
+        assert_eq!(tools_or_message(Ok(tools.clone())), Ok(tools));
     }
 }
