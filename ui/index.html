@@ -5,11 +5,151 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Video optimizer</title>
+  <link rel="stylesheet" href="app.css">
 </head>
-<body>
-  <!-- A placeholder so the app has a page to show; the window itself comes later. -->
-  <main>
-    <h1>Video optimizer</h1>
-  </main>
+<body class="app">
+  <header class="app__header" id="header">
+    <h1 class="app__title">Video optimizer</h1>
+  </header>
+
+  <div class="app__work">
+    <main class="stage" id="stage" aria-label="Preview">
+      <div class="stage__bar">
+        <div class="stage__views" role="group" aria-label="View">
+          <button class="stage__view" id="viewBeforeAfter" type="button" aria-pressed="true">Before / after</button>
+          <button class="stage__view" id="viewSideBySide" type="button" aria-pressed="false">Side by side</button>
+        </div>
+        <button class="button" id="fill" type="button" aria-pressed="false" aria-disabled="true">Fill window</button>
+        <button class="button" id="zoom" type="button" aria-disabled="true">Zoom 100%</button>
+        <button class="button stage__show" id="showSettings" type="button" aria-expanded="false" aria-controls="settings" hidden>Show settings</button>
+      </div>
+
+      <div class="stage__picture" id="picture">
+        <section class="stage__empty" id="empty" aria-labelledby="emptyTitle">
+          <h2 class="stage__emptyTitle" id="emptyTitle">Drop a video here, or choose one</h2>
+          <button class="button -primary" id="chooseVideo" type="button">Choose video</button>
+        </section>
+
+        <div class="stage__compare" id="compare" hidden>
+          <div class="stage__layer -before" id="layerBefore">
+            <video class="stage__video" id="videoBefore" preload="auto" playsinline muted></video>
+            <span class="stage__tag -before" id="tagBefore">Original</span>
+          </div>
+          <div class="stage__layer -after" id="layerAfter">
+            <video class="stage__video" id="videoAfter" preload="auto" playsinline hidden></video>
+            <span class="stage__tag -after" id="tagAfter">Sample, CRF 28</span>
+          </div>
+          <label class="hiddenText" for="divider">Before and after divider</label>
+          <input class="stage__divider" id="divider" type="range" min="0" max="100" step="1" value="50">
+          <div class="stage__handle" id="handle" aria-hidden="true"></div>
+        </div>
+
+        <!-- While the column is folded, or the comparison fills the window,
+             the status line floats here; window.js moves it in. -->
+        <div class="stage__float" id="statusFloat"></div>
+      </div>
+
+      <div class="stage__transport">
+        <button class="button stage__play" id="play" type="button" aria-disabled="true">Play</button>
+        <label class="hiddenText" for="position">Position in the 10 second sample</label>
+        <input class="stage__position" id="position" type="range" min="0" max="10" step="any" value="0" disabled>
+        <span class="stage__time" id="time">0:00 / 0:10</span>
+      </div>
+    </main>
+
+    <aside class="settings" id="settings">
+      <div class="settings__top">
+        <button class="button" id="hideSettings" type="button" aria-expanded="true" aria-controls="settings">Hide settings</button>
+      </div>
+
+      <div class="settings__scroll" id="settingsScroll" role="region" aria-label="Settings" tabindex="0">
+        <div class="settings__group">
+          <h2 class="settings__heading">File</h2>
+          <p class="settings__empty" id="fileEmpty">No video yet</p>
+          <dl class="settings__figures" id="fileFigures" hidden>
+            <dt class="settings__term">Name</dt>
+            <dd class="settings__value" id="fileName"></dd>
+            <dt class="settings__term">Size</dt>
+            <dd class="settings__value" id="fileSize"></dd>
+            <dt class="settings__term">Frame rate</dt>
+            <dd class="settings__value" id="fileFps"></dd>
+            <dt class="settings__term">Length</dt>
+            <dd class="settings__value" id="fileLength"></dd>
+            <dt class="settings__term">Audio</dt>
+            <dd class="settings__value" id="fileAudio"></dd>
+          </dl>
+          <button class="button settings__action" id="chooseOther" type="button" hidden>Choose other</button>
+        </div>
+
+        <div class="settings__group quality">
+          <h2 class="settings__heading"><label for="crf">Quality</label></h2>
+          <div class="quality__head">
+            <span class="quality__value" id="crfValue">CRF 28</span>
+            <span class="quality__word" id="crfWord">Recommended for the web</span>
+          </div>
+          <input class="quality__range" id="crf" type="range" min="20" max="36" step="1" value="28" list="crfTicks" aria-label="Quality (CRF)" aria-valuetext="CRF 28, Recommended for the web">
+          <datalist id="crfTicks">
+            <option value="20"></option>
+            <option value="24"></option>
+            <option value="28"></option>
+            <option value="32"></option>
+            <option value="36"></option>
+          </datalist>
+          <div class="quality__ends">
+            <span>Better quality, bigger file</span>
+            <span>Smaller file</span>
+          </div>
+        </div>
+
+        <div class="settings__group">
+          <h2 class="settings__heading"><label for="audio">Audio</label></h2>
+          <select class="settings__select" id="audio">
+            <option value="keep" selected>Keep</option>
+            <option value="remove">Remove</option>
+          </select>
+        </div>
+
+        <div class="settings__group" role="group" aria-labelledby="saveToHeading">
+          <h2 class="settings__heading" id="saveToHeading">Save to</h2>
+          <button class="button" id="chooseFolder" type="button">Choose folder</button>
+          <div class="settings__folder">
+            <p class="settings__note" id="saveTo">Next to the original</p>
+            <button class="button" id="clearFolder" type="button" aria-label="Clear the folder" hidden>Clear</button>
+          </div>
+        </div>
+
+        <div class="settings__group">
+          <h2 class="settings__heading">Result (first 10 seconds)</h2>
+          <p class="settings__empty" id="resultEmpty">No video yet</p>
+          <div id="resultFigures" hidden>
+            <dl class="settings__figures">
+              <dt class="settings__term">Original</dt>
+              <dd class="settings__value" id="resultOriginal"></dd>
+              <dt class="settings__term">Optimized</dt>
+              <dd class="settings__value" id="resultOptimized"></dd>
+              <dt class="settings__term">Smaller by</dt>
+              <dd class="settings__value -good" id="resultSmaller"></dd>
+              <dt class="settings__term">Whole file, about</dt>
+              <dd class="settings__value" id="resultWhole"></dd>
+              <dt class="settings__term">Quality (PSNR)</dt>
+              <dd class="settings__value" id="resultPsnr"></dd>
+            </dl>
+            <p class="settings__note">Above 40 dB is hard to see.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings__bottom" id="settingsBottom">
+        <div class="status" id="status">
+          <p class="status__text" id="statusText" aria-live="polite"></p>
+          <progress class="status__progress" id="progress" max="100" aria-label="Save progress" hidden></progress>
+          <button class="button status__cancel" id="cancel" type="button" hidden>Cancel</button>
+        </div>
+        <button class="button -primary" id="save" type="button" aria-disabled="true">Save</button>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
