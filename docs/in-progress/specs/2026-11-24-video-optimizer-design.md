@@ -109,7 +109,7 @@ See Lunaepix's `2026-11-13-lunaepix-apple-design.md` and its Windows workflow.
 - **Apple Silicon:** a job on `macos-latest` builds an ad-hoc-signed `.dmg` (`signingIdentity: "-"`). Apple Silicon refuses unsigned code as "damaged"; ad hoc turns that into the "Open Anyway" step. No $99 developer fee.
 - **Intel Mac:** a second job on an Intel runner builds its own `.dmg` with the x86_64 ffmpeg. A universal build is not used: it needs both ffmpeg builds in one app and nobody asked for it.
 - The bundled `ffmpeg` and `ffprobe` are ad-hoc signed as well, or the app cannot start them. The plan checks this on a real Mac of each kind.
-- `minimumSystemVersion` 11.0. The README explains "Open Anyway" and Windows SmartScreen's "Run anyway".
+- `minimumSystemVersion` 12.0 (was 11.0: the bundled ffmpeg builds need macOS 12, decided 2026-11-25, "Raise to macOS 12 (Recommended)"). The README explains "Open Anyway" and Windows SmartScreen's "Run anyway".
 
 ## Layout
 

@@ -17,7 +17,7 @@
 #   - the seal lists both programs, or macOS can refuse them after "Open
 #     Anyway";
 #   - each program has exactly the architecture asked for;
-#   - each program needs no newer macOS than 11.0 (`minos` of `vtool
+#   - each program needs no newer macOS than 12.0 (`minos` of `vtool
 #     -show-build`), the app's own minimumSystemVersion. A higher minos means
 #     minimumSystemVersion has to rise, or another ffmpeg build has to be
 #     pinned.
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 # The newest macOS the programs may need.
-newest_major=11
+newest_major=12
 
 fail() {
   echo "check-mac-app: $*" >&2
@@ -70,7 +70,7 @@ check_app() {
     echo "$build"
     minos=$(awk '$1 == "minos" { print $2; exit }' <<<"$build")
     [ -n "$minos" ] || fail "$program: no minos line in its build info"
-    # 11, 11.0 and 11.0.0 are fine; 11.0.1 and 11.1 are not.
+    # 12, 12.0 and 12.0.0 are fine; 12.0.1 and 12.1 are not.
     awk -v v="$minos" -v max="$newest_major" 'BEGIN {
       split(v, p, ".")
       exit !(p[1] + 0 < max || (p[1] + 0 == max && p[2] + 0 == 0 && p[3] + 0 == 0))

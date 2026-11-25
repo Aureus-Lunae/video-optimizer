@@ -38,6 +38,7 @@ Decided during execution (2026-11-25):
 - **Tests that cannot fail:** "Fix + change RED rule (Recommended)". After the third test that passed without its code, every implementer's RED run must fail on one of the test's own assertions against a typed stub, not on a missing name.
 - **CLI Ctrl-C:** "Handle Ctrl-C (Recommended)". This replaces Task 8's "Ctrl-C is not handled specially": a Ctrl-C handler sets the save's cancel flag, so ffmpeg stops and the partial file is deleted (exit code 130).
 - **ffmpeg missing at app start:** "Native message, then exit (Recommended)". A system message box says the app cannot start because ffmpeg and ffprobe were not found beside it, then the app exits.
+- **macOS 12 minimum:** "Raise to macOS 12 (Recommended)". The first CI run showed Martin Riedl's ffmpeg 9.1 builds need macOS 12.0 (`minos 12.0`), so `minimumSystemVersion` is 12.0 instead of 11.0; Macs that cannot leave macOS 11 Big Sur (about 2013–2014 models) cannot run the app. Ruled out: "Find a build for macOS 11", "Build ffmpeg ourselves".
 - **Repo is public:** "Don't have the free minutes, and while it is for private internal use, we don't care if others use it." The GitHub repo `Aureus-Lunae/video-optimizer` stays public. This reopens the licence question the spec's handoff put off ("If it is ever shared outside, the licence question comes back first"); it is open.
 - **Weak tests found by the final review:** "Include them (Recommended)". The close/exit and file-chooser tests are fixed in the final fix wave.
 
@@ -69,7 +70,7 @@ Copied from the spec:
 - Input limit: 10 GiB (10 × 1024³ bytes).
 - File paths go to ffmpeg as separate process arguments, never through a shell, and never as an argument that starts with `-`.
 - The window opens with CRF 28, Audio Keep, "Next to the original", column open, Before / after view. Nothing is remembered between launches.
-- Bundles: macOS arm64 and x86_64 as separate ad-hoc-signed `.dmg`s (`signingIdentity: "-"`, `minimumSystemVersion` 11.0), Windows x64 NSIS installer. No Linux bundle.
+- Bundles: macOS arm64 and x86_64 as separate ad-hoc-signed `.dmg`s (`signingIdentity: "-"`, `minimumSystemVersion` 12.0, see the handoff), Windows x64 NSIS installer. No Linux bundle.
 - App name "Video optimizer"; identifier `io.github.aureuslunae.videooptimizer`; CLI binary `video-optimizer`.
 
 Decided in this plan (my calls, not the user's; listed so a reviewer can see them):
@@ -677,7 +678,7 @@ Behaviour wired in `window.js`:
 
     The exact asset name of the Windows zip is read from the release page; it was not visible when this plan was written.
   - `tauri.bundle.conf.json`: `"build": { "beforeBuildCommand": "cargo run --locked -p video-optimizer-xtask -- ffmpeg" }`, `"bundle": { "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"] }`.
-  - `tauri.macos.conf.json`: `targets ["app", "dmg"]`, `signingIdentity "-"`, `minimumSystemVersion "11.0"`.
+  - `tauri.macos.conf.json`: `targets ["app", "dmg"]`, `signingIdentity "-"`, `minimumSystemVersion "12.0"` (was 11.0; see the handoff).
 
 - [ ] **Step 1: Write the failing tests**
   - xtask unit tests: `sidecar_names_for_each_triple` (`ffmpeg-aarch64-apple-darwin`, `ffprobe-x86_64-pc-windows-msvc.exe`) / `rejects_an_empty_or_non_triple` (`""`, `../x`, `abc`, as Lunaepix's `sidecar_name`).

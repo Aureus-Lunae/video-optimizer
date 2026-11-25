@@ -48,7 +48,7 @@ esac
 const VTOOL: &str = r#"#!/bin/bash
 echo "vtool $*" >> "$STUB_LOG"
 program="${@: -1}"
-minos="${STUB_MINOS:-11.0}"
+minos="${STUB_MINOS:-12.0}"
 case "$program" in
   */ffprobe) minos="${STUB_MINOS_FFPROBE:-$minos}" ;;
 esac
@@ -221,8 +221,8 @@ fn it_passes_a_good_intel_app() {
 }
 
 #[test]
-fn it_passes_a_program_that_needs_macos_11_or_older() {
-    for minos in ["11.0", "11.0.0", "10.15", "10.13.0", "11"] {
+fn it_passes_a_program_that_needs_macos_12_or_older() {
+    for minos in ["12.0", "12.0.0", "11.0", "10.15", "12"] {
         let build = Build::new();
         let output = build.run(&["arm64"], &[("STUB_MINOS", minos)]);
         assert_passes_and_looked(&build, &output);
@@ -233,15 +233,15 @@ fn it_passes_a_program_that_needs_macos_11_or_older() {
 
 #[test]
 fn it_refuses_a_program_that_needs_a_newer_macos() {
-    for minos in ["12.0", "11.0.1", "11.1", "11.3", "13"] {
+    for minos in ["13.0", "12.0.1", "12.1", "12.3", "14"] {
         let build = Build::new();
         let output = build.run(&["arm64"], &[("STUB_MINOS", minos)]);
-        assert_fails_naming(&output, &["ffmpeg", &format!("minos {minos}"), "11.0"]);
+        assert_fails_naming(&output, &["ffmpeg", &format!("minos {minos}"), "12.0"]);
     }
     // Only ffprobe is too new: it is the one named.
     let build = Build::new();
-    let output = build.run(&["arm64"], &[("STUB_MINOS_FFPROBE", "12.0")]);
-    assert_fails_naming(&output, &["ffprobe", "minos 12.0"]);
+    let output = build.run(&["arm64"], &[("STUB_MINOS_FFPROBE", "13.0")]);
+    assert_fails_naming(&output, &["ffprobe", "minos 13.0"]);
 }
 
 #[test]

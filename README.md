@@ -168,8 +168,9 @@ download the artifact from the run's page. GitHub delivers each as a zip.
 | macOS build (`.github/workflows/macos.yml`) | `video-optimizer-macos-arm64-dmg` | a `.dmg` for Apple Silicon Macs (M1 or later) |
 | macOS build (`.github/workflows/macos.yml`) | `video-optimizer-macos-intel-dmg` | a `.dmg` for Intel Macs |
 
-Both need macOS 11 or later. Neither is signed with a certificate, so the
-first launch asks you to confirm it.
+Both need macOS 12 Monterey or later, because the bundled ffmpeg builds do.
+Neither is signed with a certificate, so the first launch asks you to confirm
+it.
 
 ### macOS: "Open Anyway"
 

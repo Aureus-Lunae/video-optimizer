@@ -633,8 +633,9 @@ fn unexpected_keys(
 /// `signingIdentity` and `minimumSystemVersion`. The targets are exactly
 /// [`MACOS_BUNDLE_TARGETS`], each once. The identity is the string `-` (an
 /// ad-hoc signature: no certificate, no secret) and the minimum version the
-/// string `11.0`, the first macOS that runs Apple Silicon. Values are judged
-/// by JSON type: the number `11` and `null` are wrong values.
+/// string `12.0`, the oldest macOS the bundled ffmpeg builds run on (their
+/// `minos`). Values are judged by JSON type: the number `12` and `null` are
+/// wrong values.
 fn macos_config_problems(config: &Value) -> Vec<String> {
     let mut problems = Vec::new();
     if let Some(top) = config.as_object() {
@@ -683,7 +684,7 @@ fn macos_config_problems(config: &Value) -> Vec<String> {
         &["signingIdentity", "minimumSystemVersion"],
         "bundle.macOS",
     ));
-    for (key, wanted) in [("signingIdentity", "-"), ("minimumSystemVersion", "11.0")] {
+    for (key, wanted) in [("signingIdentity", "-"), ("minimumSystemVersion", "12.0")] {
         if macos.get(key) != Some(&Value::String(wanted.to_owned())) {
             problems.push(format!(
                 "bundle.macOS.{key}: must be the string {wanted:?}, found {}",
@@ -703,18 +704,18 @@ fn good_macos_config() -> Value {
         "$schema": "https://schema.tauri.app/config/2",
         "bundle": {
             "targets": ["app", "dmg"],
-            "macOS": { "signingIdentity": "-", "minimumSystemVersion": "11.0" }
+            "macOS": { "signingIdentity": "-", "minimumSystemVersion": "12.0" }
         }
     })
 }
 
 #[test]
-fn macos_config_signs_ad_hoc_for_11_0() {
+fn macos_config_signs_ad_hoc_for_12_0() {
     let config = read_json("tauri.macos.conf.json");
     assert_eq!(macos_config_problems(&config), Vec::<String>::new());
     assert_eq!(config["bundle"]["targets"], json!(MACOS_BUNDLE_TARGETS));
     assert_eq!(config["bundle"]["macOS"]["signingIdentity"], "-");
-    assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "11.0");
+    assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "12.0");
 }
 
 #[test]
@@ -791,9 +792,10 @@ fn a_macos_config_with_another_minimum_version_is_caught_in_a_fixture() {
     for fixture in [
         with(None),
         with(Some(json!("10.13"))),
-        with(Some(json!("11"))),
-        with(Some(json!(11))),
-        with(Some(json!(11.0))),
+        with(Some(json!("11.0"))),
+        with(Some(json!("12"))),
+        with(Some(json!(12))),
+        with(Some(json!(12.0))),
     ] {
         let problems = macos_config_problems(&fixture);
         assert!(
@@ -802,7 +804,7 @@ fn a_macos_config_with_another_minimum_version_is_caught_in_a_fixture() {
         );
     }
     assert_eq!(
-        macos_config_problems(&with(Some(json!("11.0")))),
+        macos_config_problems(&with(Some(json!("12.0")))),
         Vec::<String>::new()
     );
 }

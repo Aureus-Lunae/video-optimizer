@@ -147,7 +147,7 @@ jobs:
       # mounted .dmg (which is what people download): ffmpeg and ffprobe sit in
       # Contents/MacOS and can run, the ad-hoc signature holds and seals both,
       # each has the architecture of this Mac (EXPECTED_ARCH, from lipo) and
-      # needs no newer macOS than 11.0 (minos, from vtool), the app's own
+      # needs no newer macOS than 12.0 (minos, from vtool), the app's own
       # minimumSystemVersion. A higher minos fails the job: minimumSystemVersion
       # then has to rise, or another ffmpeg build has to be pinned. The checks
       # are in scripts/check-mac-app.sh, which src-tauri/tests/check_mac_app.rs

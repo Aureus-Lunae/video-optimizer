@@ -4,7 +4,7 @@
     "targets": ["app", "dmg"],
     "macOS": {
       "signingIdentity": "-",
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "12.0"
     }
   }
 }
