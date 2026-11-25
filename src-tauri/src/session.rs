@@ -29,9 +29,10 @@ use crate::events::{
     sample, save_finished, video_loaded, without_folders,
 };
 
+// The shared test-clip helper, included once; `media`'s tests use it from here.
 #[cfg(test)]
 #[path = "../../crates/core/tests/common/clips.rs"]
-mod clips;
+pub(crate) mod clips;
 #[cfg(all(test, unix))]
 #[path = "../../crates/core/tests/common/fake_ffmpeg.rs"]
 mod fake_ffmpeg;
