@@ -1,0 +1,7 @@
+# The Windows build links the C runtime statically, so the app and its worker
+# start on a clean Windows machine that lacks the Visual C++ redistributable
+# (vcruntime140.dll). src-tauri/tests/config.rs reads this file as TOML and
+# checks the flag. A RUSTFLAGS environment variable would replace these flags,
+# so the Windows workflow sets none.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

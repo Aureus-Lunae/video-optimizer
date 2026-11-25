@@ -1,0 +1,13 @@
+[package]
+name = "video-optimizer-core"
+description = "The Video optimizer core library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+serde = { version = "1", features = ["derive"] }
