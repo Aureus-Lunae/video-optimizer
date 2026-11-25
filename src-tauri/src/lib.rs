@@ -7,6 +7,7 @@
 //! event; the window hears file and folder names, numbers and reasons.
 
 pub mod events;
+pub mod media;
 pub mod session;
 
 use std::path::PathBuf;
@@ -14,7 +15,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tauri::{AppHandle, DragDropEvent, Emitter, Manager, RunEvent, Window, WindowEvent, Wry};
+use tauri::{
+    AppHandle, DragDropEvent, Emitter, Manager, RunEvent, UriSchemeContext, UriSchemeResponder,
+    Window, WindowEvent, Wry,
+};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 use video_optimizer_core::tools::Tools;
 
@@ -152,6 +156,39 @@ fn dropped_paths(event: &WindowEvent) -> Option<Vec<PathBuf>> {
     }
 }
 
+/// Start `job` on a thread of its own named `media`: it reads a file the
+/// `media` scheme serves.
+fn spawn_media_thread(job: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("media".to_owned())
+        .spawn(job)
+        .map(drop)
+}
+
+/// The `media` scheme: a request is answered by [`media::serve`] on a thread
+/// of its own, which reads the file, so the webview's thread never waits.
+/// If no thread can be started, or the session is not there yet, the request
+/// gets `404`.
+fn media_protocol(
+    context: UriSchemeContext<'_, Wry>,
+    request: tauri::http::Request<Vec<u8>>,
+    responder: UriSchemeResponder,
+) {
+    let app = context.app_handle().clone();
+    media::on_own_thread_or_else(
+        (app, request, responder),
+        |(app, request, responder)| {
+            let response = match app.try_state::<AppState>() {
+                Some(state) => media::serve(&*state.shared, &request),
+                None => media::not_found().into_http(),
+            };
+            responder.respond(response);
+        },
+        spawn_media_thread,
+        |(_, _, responder)| responder.respond(media::not_found().into_http()),
+    );
+}
+
 /// The window closing and dropping, handled here so no path reaches the
 /// window. Closing stops the jobs and waits for them (at most
 /// [`CLOSE_WAIT`]) before the window goes, so a stopped save leaves no
@@ -181,6 +218,7 @@ pub fn run() -> ExitCode {
     // stay unreachable, as the window has no dialog permission.
     let built = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("media", media_protocol)
         .setup(move |app| {
             let emit = emitter(app.handle().clone());
             let shared = Shared::new(tools, std::env::temp_dir(), emit);
