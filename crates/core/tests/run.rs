@@ -6,6 +6,9 @@
 
 #[path = "common/clips.rs"]
 mod clips;
+#[cfg(unix)]
+#[path = "common/fake_ffmpeg.rs"]
+mod fake_ffmpeg;
 
 use std::ffi::OsString;
 use std::io::ErrorKind;
@@ -23,6 +26,8 @@ use video_optimizer_core::settings::Settings;
 use video_optimizer_core::tools::{Tools, file_arg};
 
 use clips::Clip;
+#[cfg(unix)]
+use fake_ffmpeg::script_tools;
 
 fn tools() -> Tools {
     Tools::locate().expect("ffmpeg and ffprobe are needed for these tests")
@@ -315,19 +320,6 @@ fn a_program_that_cannot_start_returns_start() {
 }
 
 // ---- run_ffmpeg, a shell script standing in for ffmpeg ----
-
-/// Tools whose "ffmpeg" is a shell script with this `body`, in `dir`.
-#[cfg(unix)]
-fn script_tools(dir: &Path, body: &str) -> Tools {
-    use std::os::unix::fs::PermissionsExt;
-    let path = dir.join("fake-ffmpeg");
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    Tools {
-        ffmpeg: path,
-        ffprobe: dir.join("no-ffprobe"),
-    }
-}
 
 #[cfg(unix)]
 #[test]

@@ -27,6 +27,12 @@ pub enum Codec {
 /// What to put in a clip. `Clip::default()` is a 2 second, 640x360, 10 frames
 /// per second H.264 clip with no audio, no rotation and no cover art; give it
 /// a `name`.
+///
+/// An odd `width` or `height` is made as a crop of the next even size, in
+/// `yuv444p` (the test pattern and the 4:2:0 formats only have even sizes).
+/// Only [`Codec::Mpeg4`] and [`Codec::ProRes`] hold such a size: 8-bit 4:2:0
+/// H.264 cannot have one (its crop unit is 2 pixels), so [`make`] panics for
+/// an odd [`Codec::H264`] clip.
 #[derive(Debug, Clone)]
 pub struct Clip {
     /// The file name, made inside the folder given to [`make`].
@@ -99,11 +105,18 @@ fn file(path: &Path) -> OsString {
 pub fn make(dir: &Path, spec: Clip) -> PathBuf {
     let out = dir.join(&spec.name);
     let seconds = spec.seconds;
+    let odd = spec.width % 2 == 1 || spec.height % 2 == 1;
+    assert!(
+        !(odd && spec.codec == Codec::H264),
+        "8-bit 4:2:0 H.264 cannot have an odd size"
+    );
     let mut a = args(["-f", "lavfi", "-i"]);
     a.push(
         format!(
             "testsrc2=size={}x{}:rate={}:duration={seconds}",
-            spec.width, spec.height, spec.fps
+            spec.width + spec.width % 2,
+            spec.height + spec.height % 2,
+            spec.fps
         )
         .into(),
     );
@@ -127,6 +140,10 @@ pub fn make(dir: &Path, spec: Clip) -> PathBuf {
         maps.push(args(["-map", &format!("{next_input}:v")]));
     }
     a.extend(maps.into_iter().flatten());
+    if odd {
+        a.extend(args(["-filter:v:0"]));
+        a.push(format!("format=yuv444p,crop={}:{}", spec.width, spec.height).into());
+    }
     match spec.codec {
         Codec::H264 => a.extend(args([
             "-c:v:0",
