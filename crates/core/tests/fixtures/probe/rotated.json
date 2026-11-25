@@ -1,0 +1,36 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 1920,
+      "height": 1080,
+      "pix_fmt": "yuv420p",
+      "avg_frame_rate": "10/1",
+      "bit_rate": "6889888",
+      "disposition": {
+        "attached_pic": 0
+      },
+      "side_data_list": [
+        {
+          "side_data_type": "Display Matrix",
+          "rotation": -90
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "avg_frame_rate": "0/0",
+      "bit_rate": "70248",
+      "disposition": {
+        "attached_pic": 0
+      }
+    }
+  ],
+  "format": {
+    "duration": "1.000000"
+  }
+}
