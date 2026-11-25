@@ -2,7 +2,10 @@
 //! places it looks, with the variable and `PATH` set the way a user's would be.
 //!
 //! The environment is process-wide, so everything that changes it is in this
-//! one test, in this one test binary: nothing else runs beside it.
+//! one test, in this one test binary: nothing else runs beside it. The
+//! "beside the app" place is tried in a child process: a copy of this test
+//! program in a folder of its own (the same test, which then only reports what
+//! `locate()` found).
 
 use std::ffi::OsStr;
 use std::fs;
@@ -45,8 +48,84 @@ fn remove_var(name: &str) {
     unsafe { std::env::remove_var(name) }
 }
 
+/// Set in the child process only (see [`locate_in_a_copy_of_this_program`]).
+const CHILD_VAR: &str = "VIDEO_OPTIMIZER_LOCATE_CHILD";
+const FFMPEG_LINE: &str = "located ffmpeg: ";
+const FFPROBE_LINE: &str = "located ffprobe: ";
+
+/// What the copy of this program does when the test runs in it: print what
+/// `Tools::locate()` finds, then stop. The real test below never gets here.
+fn report_located_tools() {
+    match Tools::locate() {
+        Ok(tools) => {
+            println!("{FFMPEG_LINE}{}", tools.ffmpeg.display());
+            println!("{FFPROBE_LINE}{}", tools.ffprobe.display());
+        }
+        Err(error) => println!("located nothing: {error}"),
+    }
+}
+
+/// Run a copy of this test program from a folder that holds both tools, with
+/// the variable and `PATH` naming other folders that also hold both, and
+/// return what `Tools::locate()` found in it. The copy sits in its own temp
+/// folder: nothing is ever written beside the real test program, whose folder
+/// every test of this workspace shares. The child gets its environment from
+/// `Command::env`, so this process's own is not touched.
+fn locate_in_a_copy_of_this_program() -> (TempDir, Tools) {
+    let exe = std::env::current_exe().unwrap();
+    let app = folder_with_both();
+    let copy = app.path().join(exe.file_name().unwrap());
+    // `fs::copy` keeps the permission bits, so the copy is executable.
+    fs::copy(&exe, &copy).unwrap();
+    let other_variable = folder_with_both();
+    let other_path = folder_with_both();
+
+    let output = std::process::Command::new(&copy)
+        .args([
+            "--exact",
+            "locate_reads_the_real_environment",
+            "--nocapture",
+        ])
+        .env(CHILD_VAR, "1")
+        .env(TOOLS_DIR_VAR, other_variable.path())
+        .env("PATH", other_path.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", {
+        String::from_utf8_lossy(&output.stderr)
+    });
+    let line = |prefix: &str| {
+        let found = stdout.lines().find_map(|line| line.strip_prefix(prefix));
+        found
+            .unwrap_or_else(|| panic!("no {prefix:?} line in the child's output:\n{stdout}"))
+            .into()
+    };
+    let tools = Tools {
+        ffmpeg: line(FFMPEG_LINE),
+        ffprobe: line(FFPROBE_LINE),
+    };
+    (app, tools)
+}
+
 #[test]
 fn locate_reads_the_real_environment() {
+    if std::env::var_os(CHILD_VAR).is_some() {
+        report_located_tools();
+        return;
+    }
+
+    // Beside the app, through the real `current_exe()`, wins over a variable
+    // and a `PATH` that both name folders with tools.
+    let (app, from_the_copy) = locate_in_a_copy_of_this_program();
+    assert_eq!(
+        from_the_copy,
+        Tools {
+            ffmpeg: app.path().join(FFMPEG),
+            ffprobe: app.path().join(FFPROBE),
+        }
+    );
+
     // The assumption the rest rests on: this test program's own folder has no
     // tools, so "beside the app" cannot answer instead of the other places.
     let exe = std::env::current_exe().unwrap();
