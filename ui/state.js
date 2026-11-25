@@ -1,7 +1,7 @@
 // The window's state as pure functions: `reduce` turns one backend event or
 // one user action into the next state, and the small functions below read
 // what the window needs from a state. No DOM here, so the node tests can load
-// it; the window (a later task) writes the state into the page.
+// it; `window.js` writes the state into the page.
 //
 // An action is `{ type, ...fields }`. A backend event is its payload with the
 // event's name as `type`: `video`, `before-ready`, `notice`, `sample`,
@@ -31,6 +31,13 @@
 // when `sampling` is true, with `sampleRequest(state)`, once per request
 // number. A `sample` or `sample-failed` event counts only for the current
 // request of the current video; an older one is ignored.
+//
+// The end of a save ("Saved …", "Save failed: …", "Save cancelled") stays on
+// the status line while `keepStatus` is true: a sample the window asks by
+// itself after the save (one the save cut short, or the first once the
+// before clip is ready) is stored without replacing it. A change of quality
+// or audio, a new video, a new save or a failed sample puts its own text
+// there again.
 
 import { formatMB } from './format.js';
 import { isCrf } from './quality.js';
@@ -60,6 +67,7 @@ export function initialState() {
     sampling: false,
     saving: null,
     status: '',
+    keepStatus: false,
   };
 }
 
@@ -84,7 +92,7 @@ function canSample(state) {
  * when one can be, and the status says so.
  */
 function asked(state, changes) {
-  const next = { ...state, ...changes, request: state.request + 1 };
+  const next = { ...state, ...changes, request: state.request + 1, keepStatus: false };
   const sampling = canSample(next);
   return { ...next, sampling, status: sampling ? STATUS_SAMPLING : next.status };
 }
@@ -113,6 +121,7 @@ function loadVideo(state, action) {
     // A sample of the new video is a new request, above any asked before.
     request: state.request + 1,
     status: action.displayCopy === true ? STATUS_PREPARING : STATUS_SAMPLING,
+    keepStatus: false,
   };
 }
 
@@ -122,7 +131,7 @@ function beforeReady(state, action) {
   }
   const next = { ...state, video: { ...state.video, beforeReady: true } };
   const sampling = canSample(next);
-  return { ...next, sampling, status: sampling ? STATUS_SAMPLING : next.status };
+  return { ...next, sampling, status: sampling && !next.keepStatus ? STATUS_SAMPLING : next.status };
 }
 
 function notice(state, action) {
@@ -153,14 +162,15 @@ function sampleArrived(state, action) {
   if (!isCurrentRequest(state, action)) {
     return state;
   }
-  return { ...state, sample: payload(action), sampling: false, status: STATUS_SAMPLE_READY };
+  const status = state.keepStatus ? state.status : STATUS_SAMPLE_READY;
+  return { ...state, sample: payload(action), sampling: false, status, keepStatus: false };
 }
 
 function sampleFailed(state, action) {
   if (!isCurrentRequest(state, action)) {
     return state;
   }
-  return { ...state, sampling: false, status: `The sample failed: ${text(action.reason)}` };
+  return { ...state, sampling: false, status: `The sample failed: ${text(action.reason)}`, keepStatus: false };
 }
 
 function saveStarted(state) {
@@ -176,6 +186,7 @@ function saveStarted(state) {
     // A late event of the cancelled sample is now stale.
     request: state.request + 1,
     status: STATUS_SAVING,
+    keepStatus: false,
   };
 }
 
@@ -195,11 +206,12 @@ function saveProgress(state, action) {
 /** The save is over: its controls come back, and a sample it cut short is asked again. */
 function endSave(state, status) {
   const resume = state.saving !== null && state.saving.resume;
-  const next = { ...state, saving: null, status };
+  const next = { ...state, saving: null, status, keepStatus: true };
   if (!resume || !canSample(next)) {
     return next;
   }
-  // The save's own message stays on the status line.
+  // The save's own message stays on the status line, also when this sample
+  // arrives (`keepStatus`).
   return { ...next, request: next.request + 1, sampling: true };
 }
 
