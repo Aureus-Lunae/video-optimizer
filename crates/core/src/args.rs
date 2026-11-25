@@ -17,8 +17,9 @@ use crate::tools::{PathError, file_arg};
 /// The length of the sample and of the "before" clip, in seconds.
 pub const SAMPLE_SECONDS: f64 = 10.0;
 
-/// The CRF of the converted copy of an original the window cannot play: close
-/// to lossless, so the comparison shows only the sample's own loss.
+/// The CRF of the display copy (an original the window cannot play, converted;
+/// also the padded PSNR reference): close to lossless, so the comparison shows
+/// only the sample's own loss.
 const DISPLAY_COPY_CRF: &str = "10";
 
 /// How much of the input an encode covers.
@@ -122,10 +123,35 @@ pub fn encode_args(
 
 /// The arguments for the "before" clip: the first [`SAMPLE_SECONDS`] seconds of
 /// the original, with no audio. A source the window plays is copied as it is;
-/// anything else becomes a near lossless H.264 copy for display.
+/// anything else becomes a near lossless H.264 copy for display
+/// ([`display_copy_args`]).
 ///
 /// Refuses a relative input or output path.
 pub fn before_args(info: &VideoInfo, output: &Path) -> Result<Vec<OsString>, PathError> {
+    first_seconds(info, output, info.needs_display_copy())
+}
+
+/// The arguments for the near lossless H.264 copy of the first
+/// [`SAMPLE_SECONDS`] seconds, whatever the source: what [`before_args`] makes
+/// of a source the window cannot play, here also for one it can. The copy is
+/// padded to an even size, which a stream copy cannot be.
+///
+/// It is the reference a sample is measured against when the "before" clip is a
+/// stream copy of an odd source: the sample is padded, so the clip it is
+/// compared with must be padded too.
+///
+/// Refuses a relative input or output path.
+pub fn display_copy_args(info: &VideoInfo, output: &Path) -> Result<Vec<OsString>, PathError> {
+    first_seconds(info, output, true)
+}
+
+/// The list behind [`before_args`] and [`display_copy_args`]: `convert` picks
+/// the near lossless H.264 copy over the stream copy.
+fn first_seconds(
+    info: &VideoInfo,
+    output: &Path,
+    convert: bool,
+) -> Result<Vec<OsString>, PathError> {
     let input = file_arg(&info.path)?;
     let output = file_arg(output)?;
     let mut args = Vec::new();
@@ -140,7 +166,7 @@ pub fn before_args(info: &VideoInfo, output: &Path) -> Result<Vec<OsString>, Pat
             "-an",
         ],
     );
-    if info.needs_display_copy() {
+    if convert {
         push(
             &mut args,
             &[
@@ -589,6 +615,7 @@ mod tests {
         }
         lists.push(before(&info(1920, 1080)));
         lists.push(before(&prores(1281, 721)));
+        lists.push(display_copy(&info(1281, 721)));
         lists.push(strings(&psnr_args(&path("s.mp4"), &path("b.mp4")).unwrap()));
         for args in lists {
             assert!(!args.is_empty());
@@ -711,6 +738,74 @@ mod tests {
             assert!(!args.iter().any(|a| a.contains("0:a")), "{args:?}");
             assert!(!has(&args, "-c:a") && !has(&args, "-progress"));
         }
+    }
+
+    // ---- display copy, asked for directly ----
+
+    fn display_copy(info: &VideoInfo) -> Vec<String> {
+        strings(&display_copy_args(info, &path("psnr-ref.mp4")).unwrap())
+    }
+
+    #[test]
+    fn the_display_copy_converts_a_playable_source_too() {
+        // `before_args` copies it; `display_copy_args` converts it anyway.
+        let playable = info(1920, 1080);
+        let args = display_copy(&playable);
+        assert!(
+            has_run(
+                &args,
+                &[
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-pix_fmt", "yuv420p"
+                ]
+            ),
+            "{args:?}"
+        );
+        assert!(!has(&args, "copy"), "{args:?}");
+        assert!(has_run(&before(&playable), &["-c:v", "copy"]));
+        assert!(has(&args, "-an") && has_run(&args, &["-t", "10"]));
+    }
+
+    #[test]
+    fn the_display_copy_pads_an_odd_playable_source() {
+        // The case it exists for: the copy that `before_args` makes of this
+        // source is odd, so the padded comparison copy is the one that fits
+        // the (padded) sample.
+        let odd = info(1281, 721);
+        assert!(!has(&before(&odd), "-vf"));
+        assert!(has_run(&display_copy(&odd), &["-vf", "pad=1282:722"]));
+    }
+
+    #[test]
+    fn the_display_copy_of_an_even_source_has_no_filter() {
+        assert!(!has(&display_copy(&info(1920, 1080)), "-vf"));
+    }
+
+    #[test]
+    fn before_args_of_a_converted_source_is_the_display_copy() {
+        // One list, not two: `before_args` hands a source that needs a display
+        // copy to the same builder.
+        let video = prores(1281, 721);
+        assert_eq!(before(&video), display_copy_with_before_name(&video));
+    }
+
+    fn display_copy_with_before_name(info: &VideoInfo) -> Vec<String> {
+        strings(&display_copy_args(info, &path("before.mp4")).unwrap())
+    }
+
+    #[test]
+    fn a_relative_display_copy_path_is_refused() {
+        let relative = VideoInfo {
+            path: PathBuf::from("in.mp4"),
+            ..info(1920, 1080)
+        };
+        assert_eq!(
+            display_copy_args(&relative, &path("o.mp4")),
+            Err(PathError::NotAbsolute)
+        );
+        assert_eq!(
+            display_copy_args(&info(1920, 1080), Path::new("-o.mp4")),
+            Err(PathError::NotAbsolute)
+        );
     }
 
     // ---- psnr ----
