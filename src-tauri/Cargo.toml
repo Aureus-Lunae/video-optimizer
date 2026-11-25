@@ -1,0 +1,28 @@
+[package]
+name = "video-optimizer-app"
+description = "Video optimizer desktop app (Tauri 2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lib]
+name = "video_optimizer_app_lib"
+# Desktop only: no mobile build, so no staticlib or cdylib.
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+video-optimizer-core = { workspace = true }
+tauri = { version = "2.12.5", features = [] }
+# Called from Rust only; the window gets none of its permissions (see
+# capabilities/default.json).
+tauri-plugin-dialog = "2.8.4"
+serde = { version = "1.0.229", features = ["derive"] }
+# The CRF and the audio choice arrive as JSON values and go through the core's
+# own checks (`Crf::from_json`, `Audio::from_json`).
+serde_json = { workspace = true }
+# Each loaded video gets a work folder, deleted when the video is replaced.
+tempfile = { workspace = true }

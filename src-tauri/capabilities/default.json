@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: the six Video optimizer commands, and listening to their events. No dialog, file, shell or opener permission: the dialog plugin is used from Rust only.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-choose-video",
+    "allow-choose-folder",
+    "allow-clear-folder",
+    "allow-make-sample",
+    "allow-save",
+    "allow-cancel-save",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
