@@ -338,24 +338,48 @@ fn sha256_of(path: &Path) -> Result<String, String> {
         .collect())
 }
 
-/// Downloads `url` to `file` with
-/// `curl --fail --location --silent --show-error --output <file> <url>`, a
-/// child process with separate arguments and no shell. A URL that starts with
-/// `-` would be read as an option and is refused.
+/// The arguments `curl` gets to download `url` to `file`: fail on an HTTP
+/// error, follow redirects, print only errors, give up on a connection after
+/// 30 seconds and on the whole download after 15 minutes, and try a
+/// transient failure twice more. An `https://` URL may not be redirected to
+/// any other protocol (`--proto =https --proto-redir =https`); the tests'
+/// `file://` URLs get the same limits without that rule. The URL comes last.
+fn curl_args(url: &str, file: &Path) -> Vec<OsString> {
+    let mut args: Vec<OsString> = [
+        "--fail",
+        "--location",
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "900",
+        "--retry",
+        "2",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    if url.starts_with("https://") {
+        for arg in ["--proto", "=https", "--proto-redir", "=https"] {
+            args.push(arg.into());
+        }
+    }
+    args.push("--output".into());
+    args.push(file.into());
+    args.push(url.into());
+    args
+}
+
+/// Downloads `url` to `file` with `curl` and the arguments of [`curl_args`],
+/// a child process with separate arguments and no shell. A URL that starts
+/// with `-` would be read as an option and is refused.
 fn fetch_with_curl(url: &str, file: &Path) -> Result<(), String> {
     if url.starts_with('-') {
         return Err(format!("refusing a URL that starts with '-': {url}"));
     }
     let output = Command::new("curl")
-        .args([
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--output",
-        ])
-        .arg(file)
-        .arg(url)
+        .args(curl_args(url, file))
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("cannot start curl: {error}"))?;
@@ -1549,6 +1573,49 @@ archives = [
         .unwrap_err();
 
         assert!(error.contains("cannot copy"), "{error}");
+    }
+
+    /// Whether `args` holds `flag` directly followed by `value`.
+    fn has_pair(args: &[OsString], flag: &str, value: &str) -> bool {
+        args.windows(2)
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    }
+
+    fn has(args: &[OsString], flag: &str) -> bool {
+        args.iter().any(|arg| arg == flag)
+    }
+
+    #[test]
+    fn an_https_download_has_time_limits_retries_and_stays_on_https() {
+        let file = Path::new("/cache/ffmpeg.zip");
+        let url = "https://example.com/9.1/ffmpeg.zip";
+        let args = curl_args(url, file);
+
+        assert!(has_pair(&args, "--connect-timeout", "30"), "{args:?}");
+        assert!(has_pair(&args, "--max-time", "900"), "{args:?}");
+        assert!(has_pair(&args, "--retry", "2"), "{args:?}");
+        assert!(has_pair(&args, "--proto", "=https"), "{args:?}");
+        assert!(has_pair(&args, "--proto-redir", "=https"), "{args:?}");
+        for flag in ["--fail", "--location", "--silent", "--show-error"] {
+            assert!(has(&args, flag), "{flag}: {args:?}");
+        }
+        assert!(has_pair(&args, "--output", "/cache/ffmpeg.zip"), "{args:?}");
+        assert_eq!(args.last(), Some(&OsString::from(url)), "{args:?}");
+    }
+
+    #[test]
+    fn a_file_url_has_the_time_limits_but_no_https_rule() {
+        let file = Path::new("/cache/ffmpeg.zip");
+        let url = "file:///served/ffmpeg.zip";
+        let args = curl_args(url, file);
+
+        assert!(has_pair(&args, "--connect-timeout", "30"), "{args:?}");
+        assert!(has_pair(&args, "--max-time", "900"), "{args:?}");
+        assert!(has_pair(&args, "--retry", "2"), "{args:?}");
+        assert!(!has(&args, "--proto"), "{args:?}");
+        assert!(!has(&args, "--proto-redir"), "{args:?}");
+        assert!(!has(&args, "=https"), "{args:?}");
+        assert_eq!(args.last(), Some(&OsString::from(url)), "{args:?}");
     }
 
     #[test]
