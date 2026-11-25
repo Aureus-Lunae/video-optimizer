@@ -85,13 +85,14 @@ optimized-promo.mov: original kept: result was not smaller
 
 The percent of the encode goes to stderr as `\r42%`, and only when stderr is
 a terminal. The exit code is 0 when it is done (also when the original was
-kept), 1 when the video failed (then no file is left behind), and 2 when the
-arguments were wrong.
+kept), 1 when the video failed (then no file is left behind), 2 when the
+arguments were wrong, and 130 when Ctrl-C stopped it.
 
-**Ctrl-C** is not handled. ffmpeg gets the same signal and stops, but the
-program is ended without running its clean-up, so the hidden
-`.optimized-*.part` file next to the result stays (`tempfile` removes it only
-when the program ends normally). Delete it by hand.
+**Ctrl-C** stops the encode: the program stops ffmpeg, deletes the hidden
+`.optimized-*.part` file it was writing, prints `cancelled` to stderr and
+nothing to stdout, so the folder is as it was. This holds on Windows too,
+where ffmpeg runs without a console and does not get the Ctrl-C itself. A
+Ctrl-C that comes after the file is saved changes nothing.
 
 Build it with `cargo build --release -p video-optimizer-cli`; the program is
 `target/release/video-optimizer`. It needs `ffmpeg` and `ffprobe`: next to the
@@ -144,10 +145,11 @@ cargo run --locked -p video-optimizer-xtask -- ffmpeg --dest /tmp/ffmpeg
 VIDEO_OPTIMIZER_TOOLS_DIR=/tmp/ffmpeg cargo test --workspace
 ```
 
-The test that cancels a running encode (`crates/core/tests/run.rs`) finds
-ffmpeg's process with `pgrep` (procps), so `pgrep` has to be installed. macOS
-has it, and the Mac runners of the CI use it; on Linux install `procps`. The
-test is compiled for Unix only, so Windows needs no `pgrep`.
+The tests that cancel a running encode (`crates/core/tests/run.rs`, and the
+Ctrl-C tests in `crates/cli/tests/cli.rs`) find ffmpeg's process with `pgrep`
+(procps), so `pgrep` has to be installed. macOS has it, and the Mac runners of
+the CI use it; on Linux install `procps`. These tests are compiled for Unix
+only, so Windows needs no `pgrep`.
 
 ## Getting the installers
 

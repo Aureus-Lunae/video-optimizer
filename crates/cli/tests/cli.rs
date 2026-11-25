@@ -295,6 +295,176 @@ fn exits_1_with_ffmpegs_reason_and_leaves_nothing_when_the_encode_fails() {
     assert_eq!(listing(dir.path()), before);
 }
 
+// --- Ctrl-C ------------------------------------------------------------------
+
+/// Where the SIGINT goes.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+enum Interrupt {
+    /// The whole process group, as a terminal's Ctrl-C sends it: ffmpeg gets
+    /// it too, and starts to finish its file.
+    Group,
+    /// The program alone, as on Windows, where ffmpeg runs without a console
+    /// and never sees the Ctrl-C.
+    ProgramOnly,
+}
+
+/// A 20 second 1280x720 clip: preset slow takes many seconds over it, so the
+/// encode is still running when the signal comes.
+#[cfg(unix)]
+fn long_clip(name: &str) -> Clip {
+    Clip {
+        name: name.into(),
+        width: 1280,
+        height: 720,
+        seconds: 20.0,
+        fps: 25,
+        ..Clip::default()
+    }
+}
+
+/// Whether the hidden partial file of a save is in `dir` with something in
+/// it: ffmpeg is writing the encode.
+#[cfg(unix)]
+fn encode_is_writing(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with(".optimized-")
+                && name.ends_with(".part")
+                && entry.metadata().is_ok_and(|meta| meta.len() > 0)
+        })
+}
+
+/// The pids of the processes whose command line holds `dir`: the ffmpeg of a
+/// run in `dir` (the program itself is given the bare name `a.mp4`).
+#[cfg(unix)]
+fn processes_in(dir: &Path) -> Vec<u32> {
+    let output = Command::new("pgrep")
+        .args(["-f", "--"])
+        .arg(dir)
+        .output()
+        .expect("pgrep is needed to find ffmpeg's pid");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+/// Run the program on `a.mp4` in `dir`, in a process group of its own, and
+/// send it SIGINT (`to`) once ffmpeg has written part of the encode. Returns
+/// the run's output and the pids still running in `dir` once it has ended
+/// (those are then ended, so a failing test leaves no encode behind).
+#[cfg(unix)]
+fn interrupted_run(dir: &Path, to: Interrupt) -> (Output, Vec<u32>) {
+    use std::os::unix::process::CommandExt;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let mut child = command(dir)
+        .arg("a.mp4")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !encode_is_writing(dir) {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("the run ended before the signal: {status}");
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("the encode did not start within 60 seconds");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    // ffmpeg is running now, so the "nothing left running" check can fail.
+    let running = processes_in(dir);
+    assert_eq!(running.len(), 1, "one ffmpeg encodes: {running:?}");
+
+    let target = match to {
+        Interrupt::Group => format!("-{}", child.id()),
+        Interrupt::ProgramOnly => child.id().to_string(),
+    };
+    let sent = Command::new("kill")
+        .args(["-s", "INT", "--", &target])
+        .status()
+        .unwrap();
+    assert!(sent.success(), "kill {target}");
+    let output = child.wait_with_output().unwrap();
+
+    let left = processes_in(dir);
+    for pid in &left {
+        let _ = Command::new("kill")
+            .args(["-s", "KILL", &pid.to_string()])
+            .status();
+    }
+    (output, left)
+}
+
+/// Ctrl-C during the encode: exit code 130, `cancelled` on stderr, no result
+/// line, ffmpeg stopped, and the folder as it was (no `.part`, no
+/// `optimized-*`).
+#[cfg(unix)]
+fn assert_ctrl_c_cancels(to: Interrupt) {
+    let dir = TempDir::new().unwrap();
+    clips::make(dir.path(), long_clip("a.mp4"));
+    let before = listing(dir.path());
+    assert_eq!(before, ["a.mp4"]);
+
+    let (output, left) = interrupted_run(dir.path(), to);
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "{to:?}: {}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "", "{to:?}");
+    assert!(
+        stderr(&output).contains("cancelled"),
+        "{to:?}: {}",
+        stderr(&output)
+    );
+    assert_eq!(left, Vec::<u32>::new(), "{to:?}: ffmpeg still runs");
+    assert_eq!(listing(dir.path()), before, "{to:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn ctrl_c_in_a_terminal_stops_the_encode_and_leaves_the_folder_as_it_was() {
+    assert_ctrl_c_cancels(Interrupt::Group);
+}
+
+#[cfg(unix)]
+#[test]
+fn ctrl_c_to_the_program_alone_stops_ffmpeg_and_leaves_the_folder_as_it_was() {
+    assert_ctrl_c_cancels(Interrupt::ProgramOnly);
+}
+
+#[test]
+fn a_run_without_ctrl_c_exits_0_with_its_file() {
+    let dir = TempDir::new().unwrap();
+    clips::make(dir.path(), small("a.mp4"));
+    let output = run(dir.path(), &["a.mp4"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).starts_with("optimized-a.mp4: "),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        !stderr(&output).contains("cancelled"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(listing(dir.path()), ["a.mp4", "optimized-a.mp4"]);
+}
+
 // --- the options -------------------------------------------------------------
 
 #[test]
