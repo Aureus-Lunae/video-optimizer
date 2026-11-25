@@ -16,3 +16,9 @@ serde = { version = "1", features = ["derive"] }
 # Tests only, so the shipped code gains no feature.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+
+# The cancel test asks `kill(pid, 0)` whether ffmpeg is gone from the process
+# table (a zombie still answers; there is no `/proc` on macOS). Tests only. The
+# version already in Cargo.lock, so no new package.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.191"
