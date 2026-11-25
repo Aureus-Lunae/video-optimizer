@@ -1029,11 +1029,37 @@ test('Choose folder shows the folder it answers, and Clear brings back Next to t
   assert.equal(w.doc.activeElement, w.el('chooseFolder'));
 });
 
-test('a closed folder dialog keeps the folder in effect', async () => {
-  const w = start({ answers: { choose_folder: { folder: null } } });
-  await w.listening;
+/** Clicks Choose folder and answers its `choose_folder` with `answer`, as the backend would. */
+async function chooseFolderAnswered(w, answer) {
   w.el('chooseFolder').click();
+  const call = w.tauri.held.at(-1);
+  assert.equal(call.command, 'choose_folder');
+  call.resolve(answer);
   await settle();
+}
+
+test('a closed folder dialog keeps the folder in effect', async () => {
+  const w = start({ hold: ['choose_folder'] });
+  await w.listening;
+  await chooseFolderAnswered(w, { folder: 'Exports' });
+  assert.equal(w.el('saveTo').textContent, 'Exports');
+  assert.equal(w.el('clearFolder').hidden, false);
+  // The dialog closed without a pick: the backend answers the folder still in effect.
+  await chooseFolderAnswered(w, { folder: 'Exports' });
+  assert.equal(sent(w, 'choose_folder').length, 2);
+  assert.equal(w.el('saveTo').textContent, 'Exports');
+  assert.equal(w.el('clearFolder').hidden, false);
+});
+
+test('after clear_folder the folder is Next to the original again and Clear is hidden', async () => {
+  const w = start({ hold: ['choose_folder'] });
+  await w.listening;
+  await chooseFolderAnswered(w, { folder: 'Exports' });
+  assert.equal(w.el('saveTo').textContent, 'Exports');
+  w.el('clearFolder').click();
+  await settle();
+  assert.equal(sent(w, 'clear_folder').length, 1);
+  // The window wrote this text itself: the element held "Exports" just before.
   assert.equal(w.el('saveTo').textContent, 'Next to the original');
   assert.equal(w.el('clearFolder').hidden, true);
 });
