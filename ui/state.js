@@ -135,9 +135,15 @@ function notice(state, action) {
       return { ...state, status: `${text(action.name)} cannot be used: ${text(action.reason)}` };
     case 'too-large':
       return { ...state, status: `${text(action.name)} is larger than 10 GiB` };
-    case 'failed':
-      // The before clip failed, so there is no sample to wait for.
-      return { ...state, sampling: false, status: `The original could not be prepared: ${text(action.reason)}` };
+    case 'failed': {
+      const status = `The original could not be prepared: ${text(action.reason)}`;
+      // A before clip that fails is one that is not ready yet: nothing is
+      // awaited then. The backend also sends this notice when it could not
+      // load a new video; the current video, its clip and a sample in flight
+      // are fine, and the sample must still count.
+      const clipFailed = state.video !== null && !state.video.beforeReady;
+      return clipFailed ? { ...state, sampling: false, status } : { ...state, status };
+    }
     default:
       return state;
   }

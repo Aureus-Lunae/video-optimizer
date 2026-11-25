@@ -423,13 +423,30 @@ test('a notice too-large names the file and the limit, and keeps the current vid
   assert.deepEqual(next.sample, state.sample);
 });
 
-test('a notice failed says the original could not be prepared, and ends the wait for a sample', () => {
-  const state = ready();
-  assert.equal(state.sampling, true);
+test('a notice failed while the before clip is not ready says so and ends the wait for a sample', () => {
+  const state = run(loaded(), { type: 'crf', value: 30 });
+  assert.equal(state.video.beforeReady, false);
   const next = run(state, { type: 'notice', kind: 'failed', reason: 'ffmpeg failed: x' });
   assert.equal(next.status, 'The original could not be prepared: ffmpeg failed: x');
   assert.equal(next.sampling, false);
+  assert.equal(sampleRequest(next), null);
   assert.equal(next.video.name, 'Showreel V1.mp4');
+});
+
+test('a notice failed while the before clip is ready only changes the status: the sample in flight still counts', () => {
+  // The backend also sends `failed` when it could make no work folder for a
+  // new video; the current video, its before clip and its sample are fine.
+  const state = ready();
+  assert.equal(state.video.beforeReady, true);
+  assert.equal(state.sampling, true);
+  const next = run(state, { type: 'notice', kind: 'failed', reason: 'no work folder' });
+  assert.equal(next.status, 'The original could not be prepared: no work folder');
+  assert.equal(next.sampling, true);
+  assert.equal(next.request, state.request);
+  assert.deepEqual(next.video, state.video);
+  const done = run(next, sampleAction({ request: next.request }));
+  assert.equal(done.sample.request, state.request);
+  assert.equal(done.status, 'Sample ready. Save encodes the whole video.');
 });
 
 test('a notice of another kind, or without text, does not break the status', () => {
