@@ -2,5 +2,7 @@
 
 pub mod args;
 pub mod probe;
+pub mod progress;
+pub mod run;
 pub mod settings;
 pub mod tools;
