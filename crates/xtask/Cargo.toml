@@ -1,0 +1,18 @@
+[package]
+name = "video-optimizer-xtask"
+description = "Build helper: downloads the pinned ffmpeg builds and stages them as Tauri sidecars"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+# A build tool, never shipped or published.
+publish = false
+
+[dependencies]
+# SHA-256 of a downloaded archive. Already in Cargo.lock (tauri uses it).
+sha2 = "0.10.9"
+# Reads ffmpeg/builds.toml. Already in Cargo.lock (tauri's build tools use it).
+toml = "1.2.0"
+
+[dev-dependencies]
+tempfile = { workspace = true }
