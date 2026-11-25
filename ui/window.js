@@ -1,19 +1,31 @@
 // The Video optimizer window's wiring. The backend does the work and sends
 // events (src-tauri/src/events.rs); `state.js` turns each event or user action
 // into the next state, `quality.js` and `format.js` give the texts,
-// `compare.js` the divider's clip and the sample's drift correction, and
-// `zoom.js` the zoom and pan maths.
+// `compare.js` the divider's clip and the sample's drift correction,
+// `zoom.js` the zoom and pan maths, and `clips.js` how each video is given its
+// clip (the media scheme, or a blob: address where the webview cannot play
+// the scheme).
 //
 // `startWindow` looks up the elements, draws the page and hands every event
 // to those functions. It is given the page, the Tauri API, the timers,
-// ResizeObserver and a log, so the node tests drive it with stand-ins
+// ResizeObserver, fetch, the object-URL functions, the page-unload hook and a
+// log, so the node tests drive it with stand-ins
 // (tests/ui/fake-window.js); app.js calls it with the real ones. Nothing is
 // stored between launches. Every text reaches the page with textContent only.
 
-import { formatAudio, formatFps, formatLength, formatMB, formatPosition, formatPsnr } from './format.js';
+import {
+  formatAudio,
+  formatFps,
+  formatLength,
+  formatMB,
+  formatPosition,
+  formatPsnr,
+  reasonText,
+} from './format.js';
 import { canSave, controlsDisabled, initialState, reduce, sampleRequest } from './state.js';
 import { crfValueText, crfWord, readCrf } from './quality.js';
 import { dividerClip, driftCorrection } from './compare.js';
+import { createClipSources } from './clips.js';
 import { divider, pan, toActual, toFit, zoomLimits } from './zoom.js';
 
 /** Every event the backend sends (events.rs, `Event::name`). */
@@ -38,14 +50,6 @@ const SAMPLE_SECONDS = 10;
 const NEXT_TO_ORIGINAL = 'Next to the original';
 const NO_VIDEO = 'No video yet';
 const NO_SAMPLE = 'No sample yet';
-
-/** The text of a refusal: Tauri rejects a command with its error string. */
-function reasonText(reason) {
-  if (typeof reason === 'string') {
-    return reason;
-  }
-  return reason instanceof Error ? reason.message : String(reason);
-}
 
 /** The folder in `choose_folder`'s answer (`{ folder }`); `undefined` for anything else, which the state refuses. */
 function folderOf(answer) {
@@ -81,6 +85,11 @@ function hideKeepingFocus(doc, element, hidden, fallback) {
  * - `timers`: `setTimer` and `clearTimer` (setTimeout and clearTimeout);
  * - `ResizeObserver`: the class (without it the picture is fitted on each
  *   change of video or zoom only, not again when the window is resized);
+ * - `fetch(address)`: the page's fetch, for a clip the webview cannot play
+ *   from the media scheme (clips.js);
+ * - `urls`: `{ createObjectURL, revokeObjectURL }`;
+ * - `onUnload(handler)`: runs `handler` when the page goes away, so the
+ *   object URLs are revoked;
  * - `log(...values)`: where the unexpected goes.
  * Returns `{ listening }`, which settles once every event subscription has
  * been answered (a refused one is logged).
@@ -91,6 +100,8 @@ export function startWindow(env) {
   const { convertFileSrc, invoke } = tauri.core;
   const { listen } = tauri.event;
   const byId = (id) => doc.getElementById(id);
+  const sources = createClipSources({ fetch: env.fetch, urls: env.urls });
+  env.onUnload(() => sources.dispose());
 
   const header = byId('header');
   const stage = byId('stage');
@@ -106,6 +117,8 @@ export function startWindow(env) {
   const layerAfter = byId('layerAfter');
   const videoBefore = byId('videoBefore');
   const videoAfter = byId('videoAfter');
+  const clipBefore = sources.attach(videoBefore);
+  const clipAfter = sources.attach(videoAfter);
   const tagBefore = byId('tagBefore');
   const tagAfter = byId('tagAfter');
   const dividerInput = byId('divider');
@@ -337,38 +350,46 @@ export function startWindow(env) {
     }
   }
 
-  function clearVideo(video) {
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
-  }
-
-  /** The two videos follow the state: a new video clears both, a ready clip or a new sample is loaded. */
+  /**
+   * The two videos follow the state: a new video clears both, a ready clip or
+   * a new sample is loaded (clips.js gives each its source: the media scheme
+   * address, or a blob: address where the webview cannot play the scheme).
+   * A before clip that cannot be fetched is reported as an original that
+   * could not be prepared, a sample's as a sample that could not be played.
+   */
   function renderMedia() {
     const id = state.video === null ? null : state.video.video;
     if (id !== shownVideo) {
       playing = false;
-      clearVideo(videoBefore);
-      clearVideo(videoAfter);
+      clipBefore.clear();
+      clipAfter.clear();
       shownVideo = id;
       shownBefore = null;
       shownSample = null;
     }
     if (state.video !== null && state.video.beforeReady && shownBefore === null) {
       shownBefore = `${id}-before`;
-      videoBefore.setAttribute('src', convertFileSrc(shownBefore, 'media'));
+      clipBefore.show(convertFileSrc(shownBefore, 'media'), {
+        onFailed: (reason) => dispatch({ type: 'notice', kind: 'failed', reason }),
+      });
     }
     const sample = state.sample;
     const sampleKey = sample === null ? null : `${sample.video}-sample-${sample.request}`;
     if (sampleKey !== null && sampleKey !== shownSample) {
       shownSample = sampleKey;
-      videoAfter.setAttribute('src', convertFileSrc(sampleKey, 'media'));
-      // A new source starts at 0: it joins the original where it is, and
-      // plays when the original plays.
-      videoAfter.currentTime = videoBefore.currentTime;
-      if (playing) {
-        playSample();
-      }
+      clipAfter.show(convertFileSrc(sampleKey, 'media'), {
+        // A new source starts at 0: it joins the original where it is, and
+        // plays when the original plays. (A blob: source is set once its
+        // bytes are fetched, which is when this runs.)
+        onSet: () => {
+          videoAfter.currentTime = videoBefore.currentTime;
+          if (playing) {
+            playSample();
+          }
+        },
+        onFailed: (reason) =>
+          dispatch({ type: 'clip-failed', video: sample.video, request: sample.request, reason }),
+      });
     }
     videoAfter.hidden = shownSample === null;
     videoBefore.muted = true;

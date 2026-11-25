@@ -11,6 +11,7 @@
 // test that reads an attribute (the slider's `min`, a video's `preload`)
 // reads what the app ships.
 
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { fakeDocument } from './fake-document.js';
@@ -291,6 +292,94 @@ export function fakeResizeObservers() {
         if (observer.targets.includes(element)) {
           observer.callback([{ target: element }], observer);
         }
+      }
+    },
+  };
+}
+
+/**
+ * `fetch` as a webview has it: called as a method of another object it
+ * throws. Every call is held until the test answers it, so the test decides
+ * the order in which the clips arrive. `calls` lists the addresses asked, in
+ * order; `held` the calls not answered yet.
+ * `answer(address, { status = 200, blobError })` answers the oldest held call
+ * for `address` with a response whose `blob()` gives that call's own blob
+ * (`{ clip: address, call: n }`), or rejects when `blobError` is given;
+ * `fail(address, error)` rejects it as a network error does. Both throw
+ * when nothing is held for `address` (an assertion failure, so a test that
+ * answers a fetch that was never made fails on that).
+ */
+export function fakeFetch() {
+  const calls = [];
+  const held = [];
+  function take(address) {
+    const at = held.findIndex((entry) => entry.address === address);
+    assert.ok(at >= 0, `a fetch of ${address} is waiting`);
+    return held.splice(at, 1)[0];
+  }
+  function fetch(address) {
+    refuseThis(this);
+    calls.push(address);
+    const call = calls.length;
+    return new Promise((resolve, reject) => {
+      held.push({ address, call, resolve, reject });
+    });
+  }
+  return {
+    calls,
+    held,
+    fetch,
+    answer(address, { status = 200, blobError } = {}) {
+      const { call, resolve } = take(address);
+      resolve({
+        ok: status >= 200 && status < 300,
+        status,
+        blob: () => (blobError === undefined ? Promise.resolve({ clip: address, call }) : Promise.reject(blobError)),
+      });
+    },
+    fail(address, error) {
+      take(address).reject(error);
+    },
+  };
+}
+
+/**
+ * `URL.createObjectURL` and `URL.revokeObjectURL`. `created` lists
+ * `{ url, blob }` for every object URL made; `revoked` the addresses passed to
+ * `revokeObjectURL`, whatever they were; `live()` the object URLs made and not
+ * revoked yet.
+ */
+export function fakeObjectUrls() {
+  const created = [];
+  const revoked = [];
+  return {
+    created,
+    revoked,
+    createObjectURL(blob) {
+      const url = `blob:fake/${created.length + 1}`;
+      created.push({ url, blob });
+      return url;
+    },
+    revokeObjectURL(url) {
+      revoked.push(url);
+    },
+    live() {
+      return created.map(({ url }) => url).filter((url) => !revoked.includes(url));
+    },
+  };
+}
+
+/** The window's `onUnload(handler)`: `unload()` runs every handler, as the page going away does. */
+export function fakeUnload() {
+  const handlers = [];
+  return {
+    handlers,
+    onUnload(handler) {
+      handlers.push(handler);
+    },
+    unload() {
+      for (const handler of handlers) {
+        handler();
       }
     },
   };

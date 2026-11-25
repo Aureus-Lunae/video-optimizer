@@ -1,5 +1,5 @@
-// Pure text formatting for the figures in the column. No DOM here, so the
-// node tests can load it. A figure that is not known shows as "unknown", and
+// Pure text formatting for the figures in the column, and the text of a
+// refusal. No DOM here, so the node tests can load it. A figure that is not known shows as "unknown", and
 // "no sound" as "None": the window never prints NaN or "undefined".
 
 const MB = 1_000_000;
@@ -78,4 +78,12 @@ export function formatPsnr(psnr, identical) {
 /** The transport's text: "0:03 / 0:10". */
 export function formatPosition(seconds, total) {
   return `${formatLength(seconds)} / ${formatLength(total)}`;
+}
+
+/** The text of a refusal: Tauri rejects a command with its error string, a failed fetch with an Error. */
+export function reasonText(reason) {
+  if (typeof reason === 'string') {
+    return reason;
+  }
+  return reason instanceof Error ? reason.message : String(reason);
 }

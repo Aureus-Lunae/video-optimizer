@@ -387,6 +387,47 @@ test('a failed sample of an older request or another video is ignored', () => {
   assert.equal(reduce(state, { type: 'sample-failed', video: 3, request: state.request + 1, reason: 'x' }), state);
 });
 
+// A sample arrived, and then its clip could not be fetched (the window plays
+// clips from blob: addresses where the webview cannot play the media scheme).
+const clipFailed = (state, fields = {}) => ({
+  type: 'clip-failed',
+  video: 3,
+  request: state.sample === null ? 0 : state.sample.request,
+  reason: 'the clip could not be fetched (status 404)',
+  ...fields,
+});
+
+test('a clip that cannot be fetched says so, and keeps the sample and its figures', () => {
+  const state = sampled();
+  const next = run(state, clipFailed(state));
+  assert.equal(next.status, 'The sample could not be played: the clip could not be fetched (status 404)');
+  assert.deepEqual(next.sample, state.sample);
+  assert.equal(next.sampling, false);
+  assert.equal(next.keepStatus, false);
+});
+
+test('a clip failure of an older sample, another video or no sample is ignored', () => {
+  const state = run(sampled(), { type: 'crf', value: 31 }, sampleAction({ request: 2, crf: 31 }));
+  assert.equal(state.sample.request, 2, 'the newer sample is the one shown');
+  assert.notEqual(reduce(state, clipFailed(state)), state, 'a failure of the shown sample counts');
+  assert.equal(reduce(state, clipFailed(state, { request: 1 })), state);
+  assert.equal(reduce(state, clipFailed(state, { video: 2 })), state);
+  assert.equal(reduce(state, clipFailed(state, { request: 3 })), state);
+  const none = ready();
+  assert.equal(none.sample, null);
+  assert.equal(reduce(none, clipFailed(none, { request: 1 })), none);
+  const empty = initialState();
+  assert.equal(reduce(empty, clipFailed(none, { request: 1 })), empty);
+});
+
+test('a clip failure while a save runs leaves the Saving status alone', () => {
+  const state = sampled();
+  const busy = run(state, { type: 'save-started' });
+  assert.notEqual(busy.saving, null);
+  assert.notEqual(reduce(state, clipFailed(state)), state, 'the same failure counts when no save runs');
+  assert.equal(reduce(busy, clipFailed(state)), busy);
+});
+
 // ---- notices ----
 
 test('several-files gives "One video at a time"', () => {

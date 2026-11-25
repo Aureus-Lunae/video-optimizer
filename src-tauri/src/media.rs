@@ -6,13 +6,21 @@
 //! arrived; it names a video and a clip, never a path, so the window cannot
 //! reach any other file. Everything that is not the current video's before
 //! clip or its newest sample is an empty `404`.
+//!
+//! Where the webview cannot play the scheme itself (WebKitGTK on Linux), the
+//! window fetches a clip from its own origin and plays it from a `blob:`
+//! address. That is a cross-origin read, so an answer names the window's
+//! origin in `Access-Control-Allow-Origin` when the request came from it, and
+//! from no one else.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use tauri::http::header::{HeaderName, HeaderValue, RANGE};
+use tauri::http::header::{
+    ACCESS_CONTROL_ALLOW_ORIGIN, HeaderName, HeaderValue, ORIGIN, RANGE, VARY,
+};
 use tauri::http::{Request, Response, StatusCode};
 
 use crate::session::Shared;
@@ -273,15 +281,36 @@ pub fn answer(files: &dyn Files, uri_path: &str, range: Option<&str>) -> Answer 
         .unwrap_or_else(not_found)
 }
 
+/// The origins the window's own page has: `tauri://localhost` on macOS and
+/// Linux, `http://tauri.localhost` on Windows. Only these may read an answer.
+const WINDOW_ORIGINS: [&str; 2] = ["tauri://localhost", "http://tauri.localhost"];
+
 /// The webview's request answered from `files`: the URI's path as received
 /// (its query does not count) and the `Range` header. A header that is not
-/// text is none.
+/// text is none. A request whose `Origin` is exactly one of the window's own
+/// ([`WINDOW_ORIGINS`]) gets that origin in `Access-Control-Allow-Origin`
+/// (and `Vary: Origin`); any other request, or none, gets neither.
 pub fn serve(files: &dyn Files, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let range = request
         .headers()
         .get(RANGE)
         .and_then(|value| value.to_str().ok());
-    answer(files, request.uri().path(), range).into_http()
+    let mut response = answer(files, request.uri().path(), range).into_http();
+    let own_origin = request.headers().get(ORIGIN).and_then(|value| {
+        WINDOW_ORIGINS
+            .iter()
+            .find(|own| value.as_bytes() == own.as_bytes())
+    });
+    if let Some(origin) = own_origin {
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static(origin),
+        );
+        response
+            .headers_mut()
+            .insert(VARY, HeaderValue::from_static("Origin"));
+    }
+    response
 }
 
 /// Run `work(value)` on a thread that `spawn` starts. If no thread can be
@@ -955,6 +984,75 @@ mod tests {
         let queried = serve(&fake, &request("media://localhost/3-before?t=1", None));
         assert_eq!(queried.status(), StatusCode::OK);
         assert_eq!(fake.asked(), ["before 3"]);
+    }
+
+    // The window fetches a clip through this scheme on Linux, from its own
+    // origin: the page reads the answer only when it names that origin.
+
+    fn request_from(uri: &str, origin: Option<&str>) -> Request<Vec<u8>> {
+        let mut builder = Request::builder().uri(uri);
+        if let Some(origin) = origin {
+            builder = builder.header("Origin", origin);
+        }
+        builder.body(Vec::new()).unwrap()
+    }
+
+    #[test]
+    fn serve_names_the_windows_own_origin_so_the_page_may_read_the_answer() {
+        let dir = TempDir::new().unwrap();
+        let path = file_with(dir.path(), "before.mp4", 100);
+        let fake = Fake::new(Some(path), None);
+        for origin in ["tauri://localhost", "http://tauri.localhost"] {
+            let found = serve(
+                &fake,
+                &request_from("media://localhost/3-before", Some(origin)),
+            );
+            assert_eq!(found.status(), StatusCode::OK, "{origin}");
+            assert_eq!(found.headers()["access-control-allow-origin"], origin);
+            assert_eq!(found.headers()["vary"], "Origin");
+        }
+        // A 404 is readable too, so the window can say what failed.
+        let gone = Fake::new(None, None);
+        let missing = serve(
+            &gone,
+            &request_from("media://localhost/3-before", Some("tauri://localhost")),
+        );
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            missing.headers()["access-control-allow-origin"],
+            "tauri://localhost"
+        );
+    }
+
+    #[test]
+    fn serve_names_no_origin_for_a_request_from_anywhere_else() {
+        let dir = TempDir::new().unwrap();
+        let path = file_with(dir.path(), "before.mp4", 100);
+        let fake = Fake::new(Some(path), None);
+        // The same request from the window's own origin does get the header.
+        let own = serve(
+            &fake,
+            &request_from("media://localhost/3-before", Some("tauri://localhost")),
+        );
+        assert!(own.headers().get("access-control-allow-origin").is_some());
+        for origin in [
+            Some("https://example.com"),
+            Some("null"),
+            Some("tauri://localhost.evil.test"),
+            Some("*"),
+            Some(""),
+            None,
+        ] {
+            let response = serve(&fake, &request_from("media://localhost/3-before", origin));
+            assert_eq!(response.status(), StatusCode::OK, "{origin:?}");
+            assert!(
+                response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .is_none(),
+                "{origin:?}"
+            );
+        }
     }
 
     // ---- on_own_thread_or_else ----

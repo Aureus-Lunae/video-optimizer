@@ -1,7 +1,7 @@
 // A recording stand-in for `document`, for the node tests of the window
 // (window.js, through fake-window.js's page). Copied from Lunaepix and
 // extended with what a `<video>` does (`play`, `pause`, `load`,
-// `currentTime`, `paused`, `muted`, `duration`, `ended`), `inert`,
+// `currentTime`, `paused`, `muted`, `duration`, `ended`, `error`), `inert`,
 // `disabled`, and listeners on the document itself. It creates plain
 // objects, records every element it creates, and records any write that
 // would put markup into the page. Node has no DOM, so this is what lets the
@@ -130,6 +130,11 @@ export function fakeDocument() {
       this.plays = 0;
       this.pauses = 0;
       this.loads = 0;
+      // `error` is the MediaError a video holds after its `error` event (null
+      // while none): a test sets `{ code }` and fires 'error'. `srcWrites`
+      // lists every address written to the `src` attribute, in order.
+      this.error = null;
+      this.srcWrites = [];
       const classes = this.classes;
       this.classList = {
         add: (...names) => {
@@ -311,6 +316,9 @@ export function fakeDocument() {
     }
 
     setAttribute(name, value) {
+      if (name === 'src') {
+        this.srcWrites.push(String(value));
+      }
       this.attributes.set(name, String(value));
     }
 
