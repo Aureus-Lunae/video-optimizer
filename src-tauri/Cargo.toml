@@ -31,3 +31,7 @@ tempfile = { workspace = true }
 # Reads .cargo/config.toml as TOML in the config checks (the static C runtime).
 # The version already in Cargo.lock (tauri's build tools use it).
 toml = "1.2.0"
+# Reads the CI workflows as YAML 1.2 in the workflow guards (tests/workflow.rs),
+# so quoting and layout cannot hide a rule break. The version Lunaepix's
+# guard uses.
+yaml-rust2 = "0.13.0"
