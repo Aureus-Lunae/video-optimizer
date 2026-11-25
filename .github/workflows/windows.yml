@@ -1,0 +1,174 @@
+# Windows build: checks the whole workspace on Windows, then builds the
+# installer and keeps it as a downloadable artifact of the run.
+#
+# Starts by hand (Actions tab, "Run workflow") or when a tag like v0.1.0 is
+# pushed. Nothing here signs the installer, makes a release or uses a
+# credential: the installer is unsigned, so Windows SmartScreen warns on it.
+#
+# Rules this file keeps (src-tauri/tests/workflow.rs checks them):
+#   - every action is pinned to a full commit hash, with its release in a comment;
+#   - the token can only read the repository;
+#   - no pull request trigger, and no ${{ }} expression inside a run script;
+#   - C:\Windows\System32 goes first on the path before anything runs cargo,
+#     so `tar` is Windows' own bsdtar (see the comment at the first step that
+#     does it), and a step fails the job unless it is;
+#   - the test job stages ffmpeg and ffprobe and points
+#     VIDEO_OPTIMIZER_TOOLS_DIR at them before the tests run;
+#   - the Rust tests and the window script tests run even after a failed
+#     lint step, so one run reports every failure;
+#   - the installer job checks that ffmpeg.exe and ffprobe.exe sit beside the
+#     app before it uploads the installer.
+
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+# A newer run for the same ref replaces the one still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # One shell for every step, so the quoting below means the same thing
+    # everywhere (PowerShell reads quotes and "--" differently).
+    shell: bash
+
+jobs:
+  test:
+    name: Test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      # Text fixtures and rustfmt must see the line endings the repository has.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The staging below unpacks the ffmpeg .zip files with `tar`. Under
+      # `shell: bash` Git's usr/bin comes first on the path, so `tar` is GNU
+      # tar, which cannot read a .zip and reads `C:\...` as a remote
+      # host:file. GITHUB_PATH puts a folder first on the path of the steps
+      # after this one, so `tar` becomes Windows' own bsdtar.
+      - name: Put Windows' own tools first on the path
+        run: echo 'C:\Windows\System32' >> "$GITHUB_PATH"
+
+      # A step apart, because the path takes effect from the next step on. It
+      # fails the job unless `tar` is bsdtar, and prints which one it is.
+      - name: Check that tar is bsdtar
+        run: tar --version | grep bsdtar
+
+      # Downloads the pinned ffmpeg 9.1 build (ffmpeg/builds.toml), checks its
+      # SHA-256 and unpacks ffmpeg.exe and ffprobe.exe into a folder of the
+      # runner. The CLI and core tests find them through
+      # VIDEO_OPTIMIZER_TOOLS_DIR, which GITHUB_ENV sets for the steps after
+      # this one.
+      - name: Stage ffmpeg for the tests
+        run: |
+          cargo run --locked -p video-optimizer-xtask -- ffmpeg --dest "$RUNNER_TEMP/ffmpeg"
+          echo "VIDEO_OPTIMIZER_TOOLS_DIR=$RUNNER_TEMP/ffmpeg" >> "$GITHUB_ENV"
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        if: success() || failure()
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Includes the tests that run the real ffmpeg: the encodes, the cancel
+      # test and the sample figures.
+      # --no-fail-fast: every test binary runs even after one fails, so one
+      # run reports every Windows failure. Runs even when the formatting or
+      # the lints failed, for the same reason.
+      - name: Rust tests
+        if: success() || failure()
+        run: cargo test --workspace --no-fail-fast
+
+      # The glob is quoted so that node expands it, not the shell. Runs even
+      # when the Rust tests failed, so one run reports the failures of both.
+      - name: Window script tests
+        if: success() || failure()
+        run: node --test "tests/ui/*.test.js"
+
+  build:
+    name: Installer
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+
+      # No build cache here: the test job's cache is a debug-profile cache,
+      # which a release build cannot use, and a cache of its own would only
+      # add upload time.
+
+      # `cargo tauri build` runs the ffmpeg staging first (beforeBuildCommand
+      # of tauri.bundle.conf.json), which unpacks .zip files with `tar`: the
+      # same two steps as in the test job.
+      - name: Put Windows' own tools first on the path
+        run: echo 'C:\Windows\System32' >> "$GITHUB_PATH"
+
+      - name: Check that tar is bsdtar
+        run: tar --version | grep bsdtar
+
+      # The repository has no package.json, so the Tauri command line comes
+      # from crates.io at a fixed version, built against the lock file of the
+      # tool itself.
+      - name: Install the Tauri command line
+        run: cargo install tauri-cli --locked --version 2.12.4
+
+      # Builds in release mode and bundles the NSIS installer. The config
+      # file stages the pinned ffmpeg and ffprobe first (crates/xtask) and
+      # makes them sidecars, which Tauri puts beside the app.
+      - name: Build the installer
+        run: cargo tauri build --config src-tauri/tauri.bundle.conf.json
+
+      # Fails the job unless the app and both programs sit in the build
+      # folder: the NSIS installer installs them from there, beside the app.
+      # The listing is for the log; it is not a check.
+      - name: Check that ffmpeg and ffprobe sit beside the app
+        run: |
+          ls -l target/release/
+          test -f target/release/video-optimizer-app.exe
+          test -f target/release/ffmpeg.exe
+          test -f target/release/ffprobe.exe
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: video-optimizer-windows-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 30

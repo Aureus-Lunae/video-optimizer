@@ -1,0 +1,278 @@
+# macOS build: checks the whole workspace on an Apple Silicon Mac, then builds
+# the app and its disk image twice and keeps each disk image as a downloadable
+# artifact of the run: one on Apple Silicon (macos-latest) and one on an Intel
+# Mac (macos-15-intel).
+#
+# Starts by hand (Actions tab, "Run workflow") or when a tag like v0.1.0 is
+# pushed. Nothing here makes a release or uses a credential: the app is only
+# signed ad hoc (no Apple certificate), so macOS asks to confirm it with
+# "Open Anyway" the first time it is opened.
+#
+# Rules this file keeps (src-tauri/tests/workflow.rs checks them):
+#   - every action is pinned to a full commit hash, with its release in a comment;
+#   - the token can only read the repository;
+#   - no pull request trigger, and no ${{ }} expression inside a run script;
+#   - the cache steps save only from main (see the comment at the first one);
+#   - the test job stages ffmpeg and ffprobe and points
+#     VIDEO_OPTIMIZER_TOOLS_DIR at them before the tests run;
+#   - the Rust tests and the window script tests run even after a failed
+#     lint step, so one run reports every failure;
+#   - each app is checked before it is uploaded: ffmpeg and ffprobe sit in it,
+#     are signed and sealed in, have the architecture of the Mac that built
+#     them and need no newer macOS than 11 (see the check step).
+
+name: macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+# A newer run for the same ref replaces the one still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # One shell for every step, the same as the Windows workflow. With
+    # `shell: bash` set, every script runs with -e and -o pipefail.
+    shell: bash
+
+jobs:
+  test:
+    name: Test
+    # Apple Silicon.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      # Saves its cache only from main: a tag run can restore the cache of the
+      # default branch but not the cache of another tag, so a cache saved by a
+      # tag run is never read and only costs upload time.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # Downloads the pinned ffmpeg 9.1 build (ffmpeg/builds.toml), checks its
+      # SHA-256 and unpacks ffmpeg and ffprobe into a folder of the runner.
+      # The CLI and core tests find them through VIDEO_OPTIMIZER_TOOLS_DIR,
+      # which GITHUB_ENV sets for the steps after this one.
+      - name: Stage ffmpeg for the tests
+        run: |
+          cargo run --locked -p video-optimizer-xtask -- ffmpeg --dest "$RUNNER_TEMP/ffmpeg"
+          echo "VIDEO_OPTIMIZER_TOOLS_DIR=$RUNNER_TEMP/ffmpeg" >> "$GITHUB_ENV"
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        if: success() || failure()
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Includes the tests that run the real ffmpeg: the encodes, the cancel
+      # test (it needs pgrep, which macOS has) and the sample figures.
+      # --no-fail-fast: every test binary runs even after one fails, so one
+      # run reports every macOS failure. Runs even when the formatting or the
+      # lints failed, for the same reason.
+      - name: Rust tests
+        if: success() || failure()
+        run: cargo test --workspace --no-fail-fast
+
+      # The glob is quoted so that node expands it, not the shell. Runs even
+      # when the Rust tests failed, so one run reports the failures of both.
+      - name: Window script tests
+        if: success() || failure()
+        run: node --test "tests/ui/*.test.js"
+
+  build:
+    name: Installer (Apple Silicon)
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+
+      # A cache of its own, unlike Windows: Mac minutes cost more than the
+      # cache upload does. rust-cache keys it by job, so it stays apart from
+      # the test job's debug-profile cache. It also keeps ~/.cargo/bin. Like
+      # the test job's cache it is saved only from main (a tag run cannot
+      # restore another tag's cache, only main's), so a tag run finds the Tauri
+      # command line installed only when a run from main saved it; otherwise
+      # the install below builds it from source.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The repository has no package.json, so the Tauri command line comes
+      # from crates.io at a fixed version, built against the lock file of the
+      # tool itself. When the cache already holds this version, cargo says so
+      # and leaves it alone.
+      - name: Install the Tauri command line
+        run: cargo install tauri-cli --locked --version 2.12.4
+
+      # Builds in release mode and bundles Video optimizer.app and the .dmg,
+      # both signed ad hoc (tauri.macos.conf.json). The config file stages the
+      # pinned ffmpeg and ffprobe first (crates/xtask) and makes them
+      # sidecars, which Tauri puts in Contents/MacOS.
+      - name: Build the app and the disk image
+        run: cargo tauri build --config src-tauri/tauri.bundle.conf.json
+
+      # Fails the job unless, in the app and again in the mounted .dmg (which
+      # is what people download): ffmpeg and ffprobe sit in Contents/MacOS and
+      # can run; the app's signature holds (an ad-hoc one, made by the
+      # bundler, with sealed resources); the seal lists both programs, or macOS
+      # can refuse them after "Open Anyway"; each program has the architecture
+      # of this Mac (EXPECTED_ARCH, from lipo); and each needs no newer macOS
+      # than 11.0 (minos, from vtool), the app's own minimumSystemVersion. A
+      # higher minos fails the job: minimumSystemVersion then has to rise, or
+      # another build of ffmpeg has to be pinned. Each app's Contents/MacOS is
+      # listed first, a seal that lacks a program prints the seal's entries,
+      # and each program's build info is printed, so one run shows what went
+      # wrong (the listing and the printouts are not checks).
+      - name: Check the signature, the sealed programs and their builds
+        env:
+          EXPECTED_ARCH: arm64
+        run: |
+          check_app() {
+            ls -l "$1/Contents/MacOS"
+            codesign --verify --deep --strict --verbose=2 "$1"
+            details=$(codesign -dv "$1" 2>&1)
+            echo "$details"
+            grep -qx 'Signature=adhoc' <<<"$details"
+            grep -q '^Sealed Resources version=2' <<<"$details"
+            for tool in ffmpeg ffprobe; do
+              program="$1/Contents/MacOS/$tool"
+              test -x "$program"
+              if ! plutil -extract "files2.MacOS/$tool" xml1 -o - \
+                "$1/Contents/_CodeSignature/CodeResources" >/dev/null; then
+                echo "The seal of $1 does not list MacOS/$tool. Its entries:"
+                plutil -p "$1/Contents/_CodeSignature/CodeResources" || true
+                return 1
+              fi
+              archs=$(lipo -archs "$program")
+              echo "$tool: $archs"
+              test "$archs" = "$EXPECTED_ARCH"
+              build=$(vtool -show-build "$program")
+              echo "$build"
+              minos=$(awk '$1 == "minos" { print $2; exit }' <<<"$build")
+              echo "$tool: minos $minos"
+              test -n "$minos"
+              awk -v v="$minos" 'BEGIN { split(v, p, "."); exit !(p[1] < 11 || (p[1] == 11 && p[2] + 0 == 0 && p[3] + 0 == 0)) }'
+            done
+          }
+          check_app "target/release/bundle/macos/Video optimizer.app"
+          dmg=$(ls target/release/bundle/dmg/*.dmg)
+          mount=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          check_app "$mount/Video optimizer.app"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: video-optimizer-macos-arm64-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  # The same build on an Intel Mac, for the people whose Mac is not Apple
+  # Silicon. Its own job and cache, since a cache of one architecture is no use
+  # on the other.
+  build-intel:
+    name: Installer (Intel)
+    needs: test
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+
+      # As in the Apple Silicon job.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install the Tauri command line
+        run: cargo install tauri-cli --locked --version 2.12.4
+
+      # The same build: the config file stages the Intel ffmpeg and ffprobe,
+      # the pinned builds of Martin Riedl (ffmpeg/builds.toml).
+      - name: Build the app and the disk image
+        run: cargo tauri build --config src-tauri/tauri.bundle.conf.json
+
+      # The same check as in the Apple Silicon job, with x86_64 as the
+      # architecture.
+      - name: Check the signature, the sealed programs and their builds
+        env:
+          EXPECTED_ARCH: x86_64
+        run: |
+          check_app() {
+            ls -l "$1/Contents/MacOS"
+            codesign --verify --deep --strict --verbose=2 "$1"
+            details=$(codesign -dv "$1" 2>&1)
+            echo "$details"
+            grep -qx 'Signature=adhoc' <<<"$details"
+            grep -q '^Sealed Resources version=2' <<<"$details"
+            for tool in ffmpeg ffprobe; do
+              program="$1/Contents/MacOS/$tool"
+              test -x "$program"
+              if ! plutil -extract "files2.MacOS/$tool" xml1 -o - \
+                "$1/Contents/_CodeSignature/CodeResources" >/dev/null; then
+                echo "The seal of $1 does not list MacOS/$tool. Its entries:"
+                plutil -p "$1/Contents/_CodeSignature/CodeResources" || true
+                return 1
+              fi
+              archs=$(lipo -archs "$program")
+              echo "$tool: $archs"
+              test "$archs" = "$EXPECTED_ARCH"
+              build=$(vtool -show-build "$program")
+              echo "$build"
+              minos=$(awk '$1 == "minos" { print $2; exit }' <<<"$build")
+              echo "$tool: minos $minos"
+              test -n "$minos"
+              awk -v v="$minos" 'BEGIN { split(v, p, "."); exit !(p[1] < 11 || (p[1] == 11 && p[2] + 0 == 0 && p[3] + 0 == 0)) }'
+            done
+          }
+          check_app "target/release/bundle/macos/Video optimizer.app"
+          dmg=$(ls target/release/bundle/dmg/*.dmg)
+          mount=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          check_app "$mount/Video optimizer.app"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: video-optimizer-macos-intel-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 30
